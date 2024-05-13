@@ -112,6 +112,8 @@ helpersInitialized.then(
       handle_GET_reports,
       handle_GET_snapshot,
 
+      CUSTOM_GET_CONVOS,
+
       handle_GET_testConnection,
       handle_GET_testDatabase,
       handle_GET_tryCookie,
@@ -1134,6 +1136,13 @@ helpersInitialized.then(
       // TODO want('lastMetaTime', getInt, assignToP, 0),
       handle_GET_metadata
     );
+
+    // Custom Conversation Endpoint
+    app.get(
+      "/api/test/conversations",
+      CUSTOM_GET_CONVOS
+    )
+    // End Custom Convo Endpoint
 
     app.get(
       "/api/v3/conversations",
