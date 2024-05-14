@@ -114,6 +114,7 @@ helpersInitialized.then(
 
       CUSTOM_GET_CONVOS,
       CUSTOM_POST_COMMENT,
+      CUSTOM_POST_VOTE,
 
       handle_GET_testConnection,
       handle_GET_testDatabase,
@@ -1148,6 +1149,11 @@ helpersInitialized.then(
       "/api/test/comment",
       CUSTOM_POST_COMMENT
     );
+
+    app.post(
+      "/api/test/vote",
+      CUSTOM_POST_VOTE
+    )
     // End Custom API Endpoints
 
     app.get(

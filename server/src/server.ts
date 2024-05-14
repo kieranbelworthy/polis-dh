@@ -9945,6 +9945,18 @@ Email verified! You can close this tab or hit the back button.
     console.log("Made it here");
     fail(res, 500, "made it here");
   }
+
+  function CUSTOM_POST_VOTE(
+    req: any,
+    res: {
+      status: (
+        arg0: number
+      ) => { (): any; new (): any; json: { (arg0: any): void; new (): any } };
+    }
+  ) {
+    console.log("Made it here2");
+    fail(res, 500, "made it here2");
+  }
   // END Custom API Endpoints
 
   function handle_GET_contexts(
@@ -13987,6 +13999,7 @@ Thanks for using Polis!
     // Custom API Endpoints
     CUSTOM_GET_CONVOS,
     CUSTOM_POST_COMMENT,
+    CUSTOM_POST_VOTE,
 
     handle_GET_conversationsRecentActivity,
     handle_GET_conversationsRecentlyStarted,
