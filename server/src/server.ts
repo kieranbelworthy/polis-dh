@@ -9906,7 +9906,7 @@ Email verified! You can close this tab or hit the back button.
     });
   }
 
-  // Custom Conversation Endpoint
+  // Custom API Endpoints
   function CUSTOM_GET_CONVOS(
     req: any,
     res: {
@@ -9933,6 +9933,19 @@ Email verified! You can close this tab or hit the back button.
         fail(res, 500, "polis_err_get_contexts_misc", err);
       });
   }
+
+  function CUSTOM_POST_COMMENT(
+    req: any,
+    res: {
+      status: (
+        arg0: number
+      ) => { (): any; new (): any; json: { (arg0: any): void; new (): any } };
+    }
+  ) {
+    console.log("Made it here");
+    fail(res, 500, "made it here");
+  }
+  // END Custom API Endpoints
 
   function handle_GET_contexts(
     req: any,
@@ -13970,7 +13983,11 @@ Thanks for using Polis!
     handle_GET_contexts,
     handle_GET_conversationPreloadInfo,
     handle_GET_conversations,
+
+    // Custom API Endpoints
     CUSTOM_GET_CONVOS,
+    CUSTOM_POST_COMMENT,
+
     handle_GET_conversationsRecentActivity,
     handle_GET_conversationsRecentlyStarted,
     handle_GET_conversationStats,

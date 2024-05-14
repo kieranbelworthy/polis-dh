@@ -113,6 +113,7 @@ helpersInitialized.then(
       handle_GET_snapshot,
 
       CUSTOM_GET_CONVOS,
+      CUSTOM_POST_COMMENT,
 
       handle_GET_testConnection,
       handle_GET_testDatabase,
@@ -1137,12 +1138,17 @@ helpersInitialized.then(
       handle_GET_metadata
     );
 
-    // Custom Conversation Endpoint
+    // Custom API Endpoints
     app.get(
       "/api/test/conversations",
       CUSTOM_GET_CONVOS
-    )
-    // End Custom Convo Endpoint
+    );
+
+    app.post(
+      "/api/test/comment",
+      CUSTOM_POST_COMMENT
+    );
+    // End Custom API Endpoints
 
     app.get(
       "/api/v3/conversations",
