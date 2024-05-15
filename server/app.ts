@@ -113,6 +113,7 @@ helpersInitialized.then(
       handle_GET_snapshot,
 
       CUSTOM_GET_CONVOS,
+      CUSTOM_GET_COMMENTS,
       CUSTOM_POST_COMMENT,
       CUSTOM_POST_VOTE,
 
@@ -1143,6 +1144,11 @@ helpersInitialized.then(
     app.get(
       "/api/test/conversations",
       CUSTOM_GET_CONVOS
+    );
+
+    app.get(
+      "/api/test/comments",
+      CUSTOM_GET_COMMENTS
     );
 
     app.post(
