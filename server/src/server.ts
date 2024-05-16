@@ -9962,7 +9962,27 @@ Email verified! You can close this tab or hit the back button.
   }
 
   function CUSTOM_POST_COMMENT(
-    req: any,
+    req: {
+      body: {
+        tid: number;
+        zid: number;
+        pid: number;
+        uid: number;
+        created: string;
+        modified: string;
+        txt: string;
+        velocity: number;
+        mod: number;
+        lang: string | null;
+        lang_confidence: string | null;
+        active: boolean;
+        is_meta: boolean;
+        tweet_id: string | null;
+        quote_src_url: string | null;
+        anon: boolean;
+        is_seed: boolean;
+      };
+    },
     res: {
       status: (
         arg0: number
@@ -9970,6 +9990,7 @@ Email verified! You can close this tab or hit the back button.
     }
   ) {
     console.log("Made it here");
+    console.log(req.body);
     fail(res, 500, "made it here");
   }
 
