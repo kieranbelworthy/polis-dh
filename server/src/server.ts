@@ -9991,6 +9991,59 @@ Email verified! You can close this tab or hit the back button.
   ) {
     console.log("Made it here");
     console.log(req.body);
+
+    let zid = req.body.zid.toString();
+    // let xid = req.body.xid;
+    let uid = req.body.uid.toString();
+    let txt = req.body.txt;
+    let pid = req.body.pid; // PID_FLOW may be undefined
+    let currentPid = pid;
+    // let vote = req.body.vote;
+    let anon = req.body.anon;
+    let is_seed = req.body.is_seed;
+    // let mustBeModerator = !!quote_txt || !!twitter_tweet_id || anon;
+
+    if (
+      (_.isUndefined(txt) || txt === "")
+    ) {
+      fail(res, 400, "polis_err_param_missing_txt");
+      return;
+    }
+
+    function doGetPid() {
+      // PID_FLOW
+      if (_.isUndefined(pid)) {
+        return getPidPromise(zid, uid, true).then((pid: number) => {
+          if (pid === -1) {
+            //           Argument of type '(rows: any[]) => number' is not assignable to parameter of type '(value: unknown) => number | PromiseLike<number>'.
+            // Types of parameters 'rows' and 'value' are incompatible.
+            //             Type 'unknown' is not assignable to type 'any[]'.ts(2345)
+            // @ts-ignore
+            return addParticipant(zid, uid).then(function (
+              rows: any[]
+            ) {
+              let ptpt = rows[0];
+              pid = ptpt.pid;
+              currentPid = pid;
+              return pid;
+            });
+          } else {
+            return pid;
+          }
+        });
+      }
+      return Promise.resolve(pid);
+    }
+
+    Promise.resolve()
+      .then(function () {
+        // Do some processing here
+        console.log("Yes I made it here! The text is " + txt);
+      })
+      .catch(function (err: any) {
+        fail(res, 500, "polis_err_post_comment_misc", err);
+      });
+
     fail(res, 500, "made it here");
   }
 
