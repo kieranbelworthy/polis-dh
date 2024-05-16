@@ -10039,6 +10039,16 @@ Email verified! You can close this tab or hit the back button.
       .then(function () {
         // Do some processing here
         console.log("Yes I made it here! The text is " + txt);
+
+        // TODO: this is an actual function in HANDLE_POST_COMMENTS
+        let isSpamPromise = Promise.resolve(false);
+        let isModeratorPromise = isModerator(zid, uid);
+
+        let conversationInfoPromise = getConversationInfo(zid);
+
+        let shouldCreateXidRecord = false;
+
+        console.log("Yeah made it all the way maybe?");
       })
       .catch(function (err: any) {
         fail(res, 500, "polis_err_post_comment_misc", err);
