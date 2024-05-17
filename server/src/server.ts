@@ -10083,11 +10083,6 @@ Email verified! You can close this tab or hit the back button.
               let is_moderator = results[1];
               let commentExists = results[2];
 
-              if (!is_moderator) {
-                fail(res, 403, "polis_err_post_comment_auth");
-                return;
-              }
-
               if (pid < 0) {
                 // NOTE: this API should not be called in /demo mode
                 fail(res, 500, "polis_err_post_comment_bad_pid");
