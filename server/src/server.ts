@@ -9983,16 +9983,12 @@ Email verified! You can close this tab or hit the back button.
         is_seed: boolean;
       };
     },
-    res: {
-      status: (
-        arg0: number
-      ) => { (): any; new (): any; json: { (arg0: any): void; new (): any } };
-    }
+    res: { json: (arg0: { tid: any; currentPid: any }) => void }
   ) {
     console.log("Made it here");
     console.log(req.body);
 
-    let zid = req.body.zid.toString();
+    let zid = req.body.zid;
     // let xid = req.body.xid;
     let uid = req.body.uid.toString();
     let txt = req.body.txt;
@@ -10193,8 +10189,53 @@ Email verified! You can close this tab or hit the back button.
                           addNotificationTask(zid);
                         }
 
-                        // more processing here
-                        console.log("Yeah made it all the way maybe and lang = " + lang + " im this confident " + lang_confidence);
+                        let vote: number | null = null;
+
+                        // It should be safe to delete this. Was added to postpone the no-auto-vote change for old conversations.
+                        // if (is_seed && _.isUndefined(vote) && zid <= 17037) {
+                        //   vote = 0;
+                        // }
+
+                        let createdTime = comment.created;
+                        let votePromise = _.isUndefined(vote)
+                          ? Promise.resolve()
+                          : votesPost(uid, pid, zid, tid, null, vote, 0);
+
+                        return (
+                          votePromise
+                            // This expression is not callable.
+                            //Each member of the union type '{ <U>(onFulfill?: ((value: void) => Resolvable<U>) | undefined, onReject?: ((error: any) => Resolvable<U>) | undefined): Bluebird<U>; <TResult1 = void, TResult2 = never>(onfulfilled?: ((value: void) => Resolvable<...>) | ... 1 more ... | undefined, onrejected?: ((reason: any) => Resolvable<...>) | ... 1 more ... | u...' has signatures, but none of those signatures are compatible with each other.ts(2349)
+                            // @ts-ignore
+                            .then(
+                              function (o: { vote: { created: any } }) {
+                                if (o && o.vote && o.vote.created) {
+                                  createdTime = o.vote.created;
+                                }
+
+                                setTimeout(function () {
+                                  updateConversationModifiedTime(
+                                    zid,
+                                    createdTime
+                                  );
+                                  updateLastInteractionTimeForConversation(
+                                    zid,
+                                    uid
+                                  );
+                                  if (!_.isUndefined(vote)) {
+                                    updateVoteCount(zid, pid);
+                                  }
+                                }, 100);
+
+                                res.json({
+                                  tid: tid,
+                                  currentPid: currentPid,
+                                });
+                              },
+                              function (err: any) {
+                                fail(res, 500, "polis_err_vote_on_create", err);
+                              }
+                            )
+                        );
                       },
                       function (err: { code: string | number }) {
                         if (err.code === "23505" || err.code === 23505) {
@@ -10204,7 +10245,7 @@ Email verified! You can close this tab or hit the back button.
                           fail(res, 500, "polis_err_post_comment", err);
                         }
                       }
-                    );
+                    ); // on comment create
                   }); // language detection
                 });
             },
@@ -10223,8 +10264,6 @@ Email verified! You can close this tab or hit the back button.
       .catch(function (err: any) {
         fail(res, 500, "polis_err_post_comment_misc", err);
       });
-
-    fail(res, 500, "made it here");
   }
 
   function CUSTOM_POST_VOTE(
