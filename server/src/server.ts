@@ -10099,6 +10099,32 @@ Email verified! You can close this tab or hit the back button.
                   }
                 )
                 .then(function (spammy: any) {
+                  let velocity = 1;
+                  let active = true;
+                  let classifications = [];
+                  if (bad && conv.profanity_filter) {
+                    active = false;
+                    classifications.push("bad");
+                    logger.info("active=false because (bad && conv.profanity_filter)");
+                  }
+                  if (spammy && conv.spam_filter) {
+                    active = false;
+                    classifications.push("spammy");
+                    logger.info("active=false because (spammy && conv.spam_filter)");
+                  }
+                  if (conv.strict_moderation) {
+                    active = false;
+                    logger.info("active=false because (conv.strict_moderation)");
+                  }
+
+                  let mod = 0; // hasn't yet been moderated.
+
+                  // moderators' comments are automatically in (when prepopulating).
+                  if (is_moderator && is_seed) {
+                    mod = polisTypes.mod.ok;
+                    active = true;
+                  }
+
                   console.log("Yeah made it all the way maybe and bad = " + bad);
                 });
             },
