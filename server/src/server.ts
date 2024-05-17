@@ -10048,7 +10048,58 @@ Email verified! You can close this tab or hit the back button.
 
         let shouldCreateXidRecord = false;
 
-        console.log("Yeah made it all the way maybe?");
+        let commentExistsPromise = commentExists(zid, txt);
+
+          return Promise.all([
+            conversationInfoPromise,
+            isModeratorPromise,
+            commentExistsPromise,
+          ]).then(
+            function (results: any[]) {
+              let conv = results[0];
+              let is_moderator = results[1];
+              let commentExists = results[2];
+
+              if (!is_moderator) {
+                fail(res, 403, "polis_err_post_comment_auth");
+                return;
+              }
+
+              if (pid < 0) {
+                // NOTE: this API should not be called in /demo mode
+                fail(res, 500, "polis_err_post_comment_bad_pid");
+                return;
+              }
+
+              if (commentExists) {
+                fail(res, 409, "polis_err_post_comment_duplicate");
+                return;
+              }
+
+              if (!conv.is_active) {
+                fail(res, 403, "polis_err_conversation_is_closed");
+                return;
+              }
+
+              if (_.isUndefined(txt)) {
+                logger.error("polis_err_post_comments_missing_txt");
+                throw "polis_err_post_comments_missing_txt";
+              }
+              let bad = hasBadWords(txt);
+
+              console.log("Yeah made it all the way maybe and bad = " + bad);
+            },
+            function (errors: any[]) {
+              if (errors[0]) {
+                fail(res, 500, "polis_err_getting_pid", errors[0]);
+                return;
+              }
+              if (errors[1]) {
+                fail(res, 500, "polis_err_getting_conv_info", errors[1]);
+                return;
+              }
+            }
+          );
       })
       .catch(function (err: any) {
         fail(res, 500, "polis_err_post_comment_misc", err);
