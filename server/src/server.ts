@@ -10010,30 +10010,30 @@ Email verified! You can close this tab or hit the back button.
       return;
     }
 
-    function doGetPid() {
-      // PID_FLOW
-      if (_.isUndefined(pid)) {
-        return getPidPromise(zid, uid, true).then((pid: number) => {
-          if (pid === -1) {
-            //           Argument of type '(rows: any[]) => number' is not assignable to parameter of type '(value: unknown) => number | PromiseLike<number>'.
-            // Types of parameters 'rows' and 'value' are incompatible.
-            //             Type 'unknown' is not assignable to type 'any[]'.ts(2345)
-            // @ts-ignore
-            return addParticipant(zid, uid).then(function (
-              rows: any[]
-            ) {
-              let ptpt = rows[0];
-              pid = ptpt.pid;
-              currentPid = pid;
-              return pid;
-            });
-          } else {
-            return pid;
-          }
-        });
-      }
-      return Promise.resolve(pid);
-    }
+    // function doGetPid() {
+    //   // PID_FLOW
+    //   if (_.isUndefined(pid)) {
+    //     return getPidPromise(zid, uid, true).then((pid: number) => {
+    //       if (pid === -1) {
+    //         //           Argument of type '(rows: any[]) => number' is not assignable to parameter of type '(value: unknown) => number | PromiseLike<number>'.
+    //         // Types of parameters 'rows' and 'value' are incompatible.
+    //         //             Type 'unknown' is not assignable to type 'any[]'.ts(2345)
+    //         // @ts-ignore
+    //         return addParticipant(zid, uid).then(function (
+    //           rows: any[]
+    //         ) {
+    //           let ptpt = rows[0];
+    //           pid = ptpt.pid;
+    //           currentPid = pid;
+    //           return pid;
+    //         });
+    //       } else {
+    //         return pid;
+    //       }
+    //     });
+    //   }
+    //   return Promise.resolve(pid);
+    // }
 
     Promise.resolve()
       .then(function () {
@@ -10125,7 +10125,87 @@ Email verified! You can close this tab or hit the back button.
                     active = true;
                   }
 
-                  console.log("Yeah made it all the way maybe and bad = " + bad);
+                  Promise.all([detectLanguage(txt)]).then((a: any[]) => {
+                    let detections = a[0];
+                    let detection = Array.isArray(detections)
+                      ? detections[0]
+                      : detections;
+                    let lang = detection.language;
+                    let lang_confidence = detection.confidence;
+
+                    return pgQueryP(
+                      "INSERT INTO COMMENTS " +
+                        "(pid, zid, txt, velocity, active, mod, uid, tweet_id, quote_src_url, anon, is_seed, created, tid, lang, lang_confidence) VALUES " +
+                        "($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, default, null, $12, $13) RETURNING *;",
+                      [
+                        pid,
+                        zid,
+                        txt,
+                        velocity,
+                        active,
+                        mod,
+                        uid,
+                        null,
+                        null,
+                        anon || false,
+                        is_seed || false,
+                        lang,
+                        lang_confidence,
+                      ]
+                    ).then(
+                      //                     Argument of type '(docs: any[]) => any' is not assignable to parameter of type '(value: unknown) => any'.
+                      // Types of parameters 'docs' and 'value' are incompatible.
+                      //                     Type 'unknown' is not assignable to type 'any[]'.ts(2345)
+                      // @ts-ignore
+                      function (docs: any[]) {
+                        let comment = docs && docs[0];
+                        let tid = comment && comment.tid;
+                        // let createdTime = comment && comment.created;
+
+                        if (bad || spammy || conv.strict_moderation) {
+                          getNumberOfCommentsWithModerationStatus(
+                            zid,
+                            polisTypes.mod.unmoderated
+                          )
+                            .catch(function (err: any) {
+                              logger.error(
+                                "polis_err_getting_modstatus_comment_count",
+                                err
+                              );
+                              return void 0;
+                            })
+                            .then(function (n: number) {
+                              if (n === 0) {
+                                return;
+                              }
+                              pgQueryP_readOnly(
+                                "select * from users where site_id = (select site_id from page_ids where zid = ($1)) UNION select * from users where uid = ($2);",
+                                [zid, conv.owner]
+                              ).then(function (users: any) {
+                                let uids = _.pluck(users, "uid");
+                                // also notify polis team for moderation
+                                uids.forEach(function (uid?: any) {
+                                  sendCommentModerationEmail(req, uid, zid, n);
+                                });
+                              });
+                            });
+                        } else {
+                          addNotificationTask(zid);
+                        }
+
+                        // more processing here
+                        console.log("Yeah made it all the way maybe and lang = " + lang + " im this confident " + lang_confidence);
+                      },
+                      function (err: { code: string | number }) {
+                        if (err.code === "23505" || err.code === 23505) {
+                          // duplicate comment
+                          fail(res, 409, "polis_err_post_comment_duplicate", err);
+                        } else {
+                          fail(res, 500, "polis_err_post_comment", err);
+                        }
+                      }
+                    );
+                  }); // language detection
                 });
             },
             function (errors: any[]) {
