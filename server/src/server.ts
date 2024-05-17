@@ -10087,7 +10087,20 @@ Email verified! You can close this tab or hit the back button.
               }
               let bad = hasBadWords(txt);
 
-              console.log("Yeah made it all the way maybe and bad = " + bad);
+              return isSpamPromise
+                .then(
+                  function (spammy: any) {
+                    return spammy;
+                  },
+                  function (err: any) {
+                    console.log("spam check failed");
+                    logger.error("spam check failed", err);
+                    return false; // spam check failed, continue assuming "not spammy".
+                  }
+                )
+                .then(function (spammy: any) {
+                  console.log("Yeah made it all the way maybe and bad = " + bad);
+                });
             },
             function (errors: any[]) {
               if (errors[0]) {
