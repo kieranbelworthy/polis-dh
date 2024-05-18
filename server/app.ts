@@ -116,6 +116,7 @@ helpersInitialized.then(
       CUSTOM_GET_COMMENTS,
       CUSTOM_GET_USERS,
       CUSTOM_POST_COMMENT,
+      CUSTOM_PUT_USERS,
       CUSTOM_POST_VOTE,
 
       handle_GET_testConnection,
@@ -1162,10 +1163,15 @@ helpersInitialized.then(
       CUSTOM_POST_COMMENT
     );
 
+    app.put(
+      "/api/test/user",
+      CUSTOM_PUT_USERS
+    );
+
     app.post(
       "/api/test/vote",
       CUSTOM_POST_VOTE
-    )
+    );
     // End Custom API Endpoints
 
     app.get(

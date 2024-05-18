@@ -10069,8 +10069,6 @@ Email verified! You can close this tab or hit the back button.
 
         let conversationInfoPromise = getConversationInfo(zid);
 
-        let shouldCreateXidRecord = false;
-
         let commentExistsPromise = commentExists(zid, txt);
 
           return Promise.all([
@@ -10285,6 +10283,41 @@ Email verified! You can close this tab or hit the back button.
       })
       .catch(function (err: any) {
         fail(res, 500, "polis_err_post_comment_misc", err);
+      });
+  }
+
+  function CUSTOM_PUT_USERS(
+    req: { 
+      body: { 
+        uid?: any; 
+        uid_of_user: any;
+        email: any;
+        hname: any
+      } 
+    },
+    res: { json: (arg0: any) => void }
+  ) {
+    let uid = req.body.uid;
+    if (isPolisDev(uid) && req.body.uid_of_user) {
+      uid = req.body.uid_of_user;
+    }
+
+    let fields: UserType = {};
+    if (!_.isUndefined(req.body.email)) {
+      fields.email = req.body.email;
+    }
+    if (!_.isUndefined(req.body.hname)) {
+      fields.hname = req.body.hname;
+    }
+
+    let q = sql_users.update(fields).where(sql_users.uid.equals(uid));
+
+    pgQueryP(q.toString(), [])
+      .then((result: any) => {
+        res.json(result);
+      })
+      .catch((err: any) => {
+        fail(res, 500, "polis_err_put_user", err);
       });
   }
 
@@ -14343,6 +14376,7 @@ Thanks for using Polis!
     CUSTOM_GET_COMMENTS,
     CUSTOM_GET_USERS,
     CUSTOM_POST_COMMENT,
+    CUSTOM_PUT_USERS,
     CUSTOM_POST_VOTE,
 
     handle_GET_conversationsRecentActivity,
