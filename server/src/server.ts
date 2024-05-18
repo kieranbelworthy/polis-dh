@@ -10286,6 +10286,59 @@ Email verified! You can close this tab or hit the back button.
       });
   }
 
+  function CUSTOM_POST_USER(
+    req: { 
+      body: { 
+        email: any;
+        hname: any
+      } 
+    },
+    res: { json: (arg0: any) => void }
+  ) {
+    let email = req.body.email;
+    let hname = req.body.hname;
+    let query =
+          "insert into users " +
+          "(email, hname) VALUES " +
+          "($1, $2) " +
+          "returning *;";
+
+    //       Argument of type '(rows: string | any[]) => any' is not assignable to parameter of type '(value: unknown) => any'.
+    // Types of parameters 'rows' and 'value' are incompatible.
+    //   Type 'unknown' is not assignable to type 'string | any[]'.
+    //         Type 'unknown' is not assignable to type 'any[]'.ts(2345)
+    // @ts-ignore
+    let promise = pgQueryP(query, [email, hname]).then(function (
+      rows: string | any[]
+    ) {
+      let user = (rows && rows.length && rows[0]) || null;
+      return user;
+    });
+
+    promise
+      .then(
+        //         Argument of type '(user: { uid?: any; hname: any; email: any; }) => void' is not assignable to parameter of type '(value: void | { uid?: any; }) => void | PromiseLike<void>'.
+        // Types of parameters 'user' and 'value' are incompatible.
+        //   Type 'void | { uid?: any; }' is not assignable to type '{ uid?: any; hname: any; email: any; }'.
+        //         Type 'void' is not assignable to type '{ uid?: any; hname: any; email: any; }'.ts(2345)
+        // @ts-ignore
+        function (user: { uid?: any; hname: any; email: any }) {
+          res.json({
+            uid: user.uid,
+            hname: user.hname,
+            email: user.email,
+            // token: token
+          });
+        },
+        function (err: any) {
+          fail(res, 500, "polis_err_uploading_user_misc22", err);
+        }
+      )
+      .catch(function (err: any) {
+        fail(res, 500, "polis_err_uploading_user_misc2", err);
+      });
+  }
+
   function CUSTOM_PUT_USERS(
     req: { 
       body: { 
@@ -14376,6 +14429,7 @@ Thanks for using Polis!
     CUSTOM_GET_COMMENTS,
     CUSTOM_GET_USERS,
     CUSTOM_POST_COMMENT,
+    CUSTOM_POST_USER,
     CUSTOM_PUT_USERS,
     CUSTOM_POST_VOTE,
 
