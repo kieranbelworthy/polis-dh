@@ -115,6 +115,7 @@ helpersInitialized.then(
       CUSTOM_GET_CONVOS,
       CUSTOM_GET_COMMENTS,
       CUSTOM_GET_USERS,
+      CUSTOM_GET_VOTES,
       CUSTOM_POST_COMMENT,
       CUSTOM_POST_USER,
       CUSTOM_PUT_USERS,
@@ -1157,6 +1158,11 @@ helpersInitialized.then(
     app.get(
       "/api/test/users",
       CUSTOM_GET_USERS
+    );
+
+    app.get(
+      "/api/test/votes",
+      CUSTOM_GET_VOTES
     );
 
     app.post(

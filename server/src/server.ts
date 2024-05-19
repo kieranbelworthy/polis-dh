@@ -9988,6 +9988,33 @@ Email verified! You can close this tab or hit the back button.
       });
   }
 
+  function CUSTOM_GET_VOTES(
+    req: any,
+    res: {
+      status: (
+        arg0: number
+      ) => { (): any; new (): any; json: { (arg0: any): void; new (): any } };
+    }
+  ) {
+    pgQueryP_readOnly(
+      "SELECT * FROM votes;",
+      []
+    )
+      .then(
+        function (contexts: any) {
+          res.status(200).json(contexts);
+        },
+        function (err: any) {
+          console.log("first fail");
+          fail(res, 500, "polis_err_get_contexts_query", err);
+        }
+      )
+      .catch(function (err: any) {
+        console.log("second fail");
+        fail(res, 500, "polis_err_get_contexts_misc", err);
+      });
+  }
+
   function CUSTOM_POST_COMMENT(
     req: {
       body: {
@@ -14428,6 +14455,7 @@ Thanks for using Polis!
     CUSTOM_GET_CONVOS,
     CUSTOM_GET_COMMENTS,
     CUSTOM_GET_USERS,
+    CUSTOM_GET_VOTES,
     CUSTOM_POST_COMMENT,
     CUSTOM_POST_USER,
     CUSTOM_PUT_USERS,
