@@ -10015,6 +10015,99 @@ Email verified! You can close this tab or hit the back button.
       });
   }
 
+  function CUSTOM_POST_CONVERSATION(
+    req: {
+      body: {
+        uid?: any;
+        topic: any;
+        description: any;
+        profanity_filter: any;
+        spam_filter: any;
+        strict_moderation: any;
+        conversation_id: any;
+      };
+    },
+    res: any
+  ) {
+    let q = sql_conversations
+      .insert({
+        owner: req.body.uid, // creator
+        org_id: req.body.uid, // assume the owner is the creator
+        topic: req.body.topic,
+        description: req.body.description,
+        is_active: true,
+        is_data_open: false,
+        is_draft: true,
+        is_public: true, // req.p.short_url,
+        is_anon: false,
+        profanity_filter: req.body.profanity_filter,
+        spam_filter: req.body.spam_filter,
+        strict_moderation: req.body.strict_moderation,
+        context: null,
+        owner_sees_participation_stats: true,
+        // Set defaults for fields that aren't set at postgres level.
+        auth_needed_to_vote: false,
+        auth_needed_to_write: false,
+        auth_opt_allow_3rdparty: true,
+        auth_opt_fb: true,
+        auth_opt_tw: true,
+      })
+      .returning("*")
+      .toString(); // end insert
+
+      pgQuery(
+        q,
+        [],
+        function (err: any, result: { rows: { zid: any }[] }) {
+          if (err) {
+            if (isDuplicateKey(err)) {
+              logger.error("polis_err_add_conversation", err);
+              failWithRetryRequest(res);
+            } else {
+              fail(res, 500, "polis_err_add_conversation", err);
+            }
+            return;
+          }
+
+          let zid =
+            result && result.rows && result.rows[0] && result.rows[0].zid;
+
+          // NOTE: OK to return conversation_id, because this conversation was just created by this user.
+          finishOne(res, {
+            url: buildConversationUrl(req, null),
+            zid: zid,
+          });
+
+          // const zinvitePromise = req.body.conversation_id
+          //   ? Conversation.getZidFromConversationId(
+          //       req.body.conversation_id
+          //     ).then((zid: number) => {
+          //       return zid === 0 ? req.body.conversation_id : null;
+          //     })
+          //   : generateAndRegisterZinvite(zid, false);
+
+          // zinvitePromise
+          //   .then(function (zinvite: null) {
+          //     if (zinvite === null) {
+          //       fail(
+          //         res,
+          //         400,
+          //         "polis_err_conversation_id_already_in_use",
+          //         err
+          //       );
+          //       return;
+          //     }
+              
+          //   })
+          //   .catch(function (err: any) {
+          //     fail(res, 500, "polis_err_zinvite_create", err);
+          //   });
+        }
+      ); // end insert
+
+      console.log("hopefully never run");
+  }
+
   function CUSTOM_POST_COMMENT(
     req: {
       body: {
@@ -10402,15 +10495,119 @@ Email verified! You can close this tab or hit the back button.
   }
 
   function CUSTOM_POST_VOTE(
-    req: any,
+    req: {
+      body: { 
+        tid: number;
+        uid: number;
+        zid: number;
+        pid: number;
+        vote: number;
+      }
+    },
+    // Don't include cookies yet
     res: {
       status: (
         arg0: number
       ) => { (): any; new (): any; json: { (arg0: any): void; new (): any } };
     }
   ) {
-    console.log("Made it here2");
-    fail(res, 500, "made it here2");
+    let uid = req.body.uid; // PID_FLOW uid may be undefined here.
+    let zid = req.body.zid;
+    let pid = req.body.pid;
+
+    // PID_FLOW WIP for now assume we have a uid, but need a participant record.
+    let pidReadyPromise = _.isUndefined(pid)
+    ? //         Argument of type '(rows: any[]) => void' is not assignable to parameter of type '(value: unknown) => void | PromiseLike<void>'.
+      // Types of parameters 'rows' and 'value' are incompatible.
+      //         Type 'unknown' is not assignable to type 'any[]'.ts(2345)
+      // @ts-ignore
+      addParticipant(zid, uid).then(function (rows: any[]) {
+        let ptpt = rows[0];
+        pid = ptpt.pid;
+      })
+    : Promise.resolve();
+
+  return pidReadyPromise
+    .then(function () {
+      return votesPost(
+        uid,
+        pid,
+        zid,
+        req.body.tid,
+        // xid null for now
+        null,
+        req.body.vote
+      )
+      .then(function (o: { vote: any }) {
+        // conv = o.conv;
+        let vote = o.vote;
+        let createdTime = vote.created;
+        setTimeout(function () {
+          updateConversationModifiedTime(zid, createdTime);
+          updateLastInteractionTimeForConversation(zid, uid);
+  
+          // NOTE: may be greater than number of comments, if they change votes
+          updateVoteCount(zid, pid);
+        }, 100);
+        // if (_.isUndefined(req.p.starred)) {
+        //   return;
+        // } else {
+        //   return addStar(zid, req.p.tid, pid, req.p.starred, createdTime);
+        // }
+      })
+      .then(function () {
+        // No Lang defined currently
+        return getNextComment(zid, pid, [], true);
+      })
+      .then(function (nextComment: any) {
+        logger.debug("handle_POST_votes nextComment:", {zid, pid, nextComment});
+        let result: PidReadyResult = {};
+        if (nextComment) {
+          result.nextComment = nextComment;
+        } else {
+          // no need to wait for this to finish
+          addNoMoreCommentsRecord(zid, pid);
+        }
+        // PID_FLOW This may be the first time the client gets the pid.
+        result.currentPid = pid;
+        // result.shouldMod = true; // TODO
+        if (result.shouldMod) {
+          result.modOptions = {};
+          // Pull == -1
+          if (req.body.vote === polisTypes.reactions.pull) {
+            result.modOptions.as_important = true;
+            result.modOptions.as_factual = true;
+            result.modOptions.as_feeling = true;
+          // Push == 1
+          } else if (req.body.vote === polisTypes.reactions.push) {
+            result.modOptions.as_notmyfeeling = true;
+            result.modOptions.as_notgoodidea = true;
+            result.modOptions.as_notfact = true;
+            result.modOptions.as_abusive = true;
+          // Pass == 0
+          } else if (req.body.vote === polisTypes.reactions.pass) {
+            result.modOptions.as_unsure = true;
+            result.modOptions.as_spam = true;
+            result.modOptions.as_abusive = true;
+          }
+        }
+  
+        finishOne(res, result);
+      });
+    })
+    .catch(function (err: string) {
+      if (err === "polis_err_vote_duplicate") {
+        fail(res, 406, "polis_err_vote_duplicate", err); // TODO allow for changing votes?
+      } else if (err === "polis_err_conversation_is_closed") {
+        fail(res, 403, "polis_err_conversation_is_closed", err);
+      } else if (err === "polis_err_post_votes_social_needed") {
+        fail(res, 403, "polis_err_post_votes_social_needed", err);
+      } else if (err === 'polis_err_xid_not_whitelisted') {
+        fail(res, 403, 'polis_err_xid_not_whitelisted', err);
+      } else {
+        fail(res, 500, "polis_err_vote", err);
+      }
+    });
   }
   // END Custom API Endpoints
 
@@ -14456,6 +14653,7 @@ Thanks for using Polis!
     CUSTOM_GET_COMMENTS,
     CUSTOM_GET_USERS,
     CUSTOM_GET_VOTES,
+    CUSTOM_POST_CONVERSATION,
     CUSTOM_POST_COMMENT,
     CUSTOM_POST_USER,
     CUSTOM_PUT_USERS,
