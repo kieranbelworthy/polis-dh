@@ -10140,7 +10140,6 @@ Email verified! You can close this tab or hit the back button.
       body: {
         xid: any;
         zid: number;
-        pid: number;
         uid: number;
         txt: string;
         anon: boolean;
@@ -10153,8 +10152,8 @@ Email verified! You can close this tab or hit the back button.
     let zid = req.body.zid;
     let uid = req.body.uid.toString();
     let txt = req.body.txt;
-    let pid = req.body.pid; // PID_FLOW may be undefined
-    let currentPid = pid;
+    // let pid = req.body.pid; // PID_FLOW may be undefined
+    // let currentPid = pid;
     // let vote = req.body.vote;
     let anon = req.body.anon;
     let is_seed = req.body.is_seed;
@@ -10166,6 +10165,9 @@ Email verified! You can close this tab or hit the back button.
       fail(res, 400, "polis_err_param_missing_txt");
       return;
     }
+
+    let pid: number | null = null;
+    let currentPid: number | null = null;
 
     function doGetPid() {
       console.log("I am here in doGetPid!!! and pid = " + pid);
@@ -10416,7 +10418,7 @@ Email verified! You can close this tab or hit the back button.
 
                                 res.json({
                                   tid: tid,
-                                  currentPid: currentPid,
+                                  currentPid: pid,
                                 });
                               },
                               function (err: any) {
