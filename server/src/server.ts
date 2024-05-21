@@ -10015,6 +10015,33 @@ Email verified! You can close this tab or hit the back button.
       });
   }
 
+  function CUSTOM_GET_PARTICIPANTS(
+    req: any,
+    res: {
+      status: (
+        arg0: number
+      ) => { (): any; new (): any; json: { (arg0: any): void; new (): any } };
+    }
+  ) {
+    pgQueryP_readOnly(
+      "SELECT * FROM participants;",
+      []
+    )
+      .then(
+        function (contexts: any) {
+          res.status(200).json(contexts);
+        },
+        function (err: any) {
+          console.log("first fail");
+          fail(res, 500, "polis_err_get_contexts_query", err);
+        }
+      )
+      .catch(function (err: any) {
+        console.log("second fail");
+        fail(res, 500, "polis_err_get_contexts_misc", err);
+      });
+  }
+
   function CUSTOM_POST_CONVERSATION(
     req: {
       body: {
@@ -10111,32 +10138,19 @@ Email verified! You can close this tab or hit the back button.
   function CUSTOM_POST_COMMENT(
     req: {
       body: {
-        tid: number;
+        xid: any;
         zid: number;
         pid: number;
         uid: number;
-        created: string;
-        modified: string;
         txt: string;
-        velocity: number;
-        mod: number;
-        lang: string | null;
-        lang_confidence: string | null;
-        active: boolean;
-        is_meta: boolean;
-        tweet_id: string | null;
-        quote_src_url: string | null;
         anon: boolean;
         is_seed: boolean;
       };
     },
     res: { json: (arg0: { tid: any; currentPid: any }) => void }
   ) {
-    console.log("Made it here");
-    console.log(req.body);
-
+    let xid = req.body.xid;
     let zid = req.body.zid;
-    // let xid = req.body.xid;
     let uid = req.body.uid.toString();
     let txt = req.body.txt;
     let pid = req.body.pid; // PID_FLOW may be undefined
@@ -10153,36 +10167,37 @@ Email verified! You can close this tab or hit the back button.
       return;
     }
 
-    // function doGetPid() {
-    //   // PID_FLOW
-    //   if (_.isUndefined(pid)) {
-    //     return getPidPromise(zid, uid, true).then((pid: number) => {
-    //       if (pid === -1) {
-    //         //           Argument of type '(rows: any[]) => number' is not assignable to parameter of type '(value: unknown) => number | PromiseLike<number>'.
-    //         // Types of parameters 'rows' and 'value' are incompatible.
-    //         //             Type 'unknown' is not assignable to type 'any[]'.ts(2345)
-    //         // @ts-ignore
-    //         return addParticipant(zid, uid).then(function (
-    //           rows: any[]
-    //         ) {
-    //           let ptpt = rows[0];
-    //           pid = ptpt.pid;
-    //           currentPid = pid;
-    //           return pid;
-    //         });
-    //       } else {
-    //         return pid;
-    //       }
-    //     });
-    //   }
-    //   return Promise.resolve(pid);
-    // }
+    function doGetPid() {
+      console.log("I am here in doGetPid!!! and pid = " + pid);
+      // PID_FLOW
+      if (_.isUndefined(pid) || pid == null) {
+        console.log("I think pid is undefined");
+        return getPidPromise(zid.toString(), uid, true).then((pid: number) => {
+          if (pid === -1) {
+            //           Argument of type '(rows: any[]) => number' is not assignable to parameter of type '(value: unknown) => number | PromiseLike<number>'.
+            // Types of parameters 'rows' and 'value' are incompatible.
+            //             Type 'unknown' is not assignable to type 'any[]'.ts(2345)
+            // @ts-ignore
+            return addParticipant(zid, uid).then(function (
+              rows: any[]
+            ) {
+              let ptpt = rows[0];
+              pid = ptpt.pid;
+              currentPid = pid;
+              console.log("just ran add participant, and now the pid is " + pid);
+              return pid;
+            });
+          } else {
+            console.log("not adding participant, and the pid is " + pid);
+            return pid;
+          }
+        });
+      }
+      return Promise.resolve(pid);
+    }
 
     Promise.resolve()
       .then(function () {
-        // Do some processing here
-        console.log("Yes I made it here! The text is " + txt);
-
         // TODO: this is an actual function in HANDLE_POST_COMMENTS
         let isSpamPromise = Promise.resolve(false);
         let isModeratorPromise = isModerator(zid, uid);
@@ -10191,15 +10206,43 @@ Email verified! You can close this tab or hit the back button.
 
         let commentExistsPromise = commentExists(zid, txt);
 
-          return Promise.all([
-            conversationInfoPromise,
-            isModeratorPromise,
-            commentExistsPromise,
-          ]).then(
+        let xidUserPromise =
+          !_.isUndefined(xid) && !_.isNull(xid)
+            ? getXidStuff(xid, zid)
+            : Promise.resolve();
+        let pidPromise = xidUserPromise.then((xidUser: UserType | "noXidRecord") => {
+          let shouldCreateXidRecord = xidUser === "noXidRecord";
+          if (typeof xidUser === 'object') {
+            uid = xidUser.uid;
+            pid = xidUser.pid;
+            return pid;
+          } else {
+            return doGetPid().then((pid: any) => {
+              if (shouldCreateXidRecord) {
+                // Expected 6 arguments, but got 3.ts(2554)
+                // conversation.ts(34, 3): An argument for 'x_profile_image_url' was not provided.
+                // @ts-ignore
+                return createXidRecordByZid(zid, uid, xid).then(() => {
+                  return pid;
+                });
+              }
+              console.log("I have done all the pid processing and it is " + pid);
+              return pid;
+            });
+          }
+        });
+
+        return Promise.all([
+          conversationInfoPromise,
+          isModeratorPromise,
+          commentExistsPromise,
+          pidPromise
+        ]).then(
             function (results: any[]) {
               let conv = results[0];
               let is_moderator = results[1];
               let commentExists = results[2];
+              let pid = results[3];
 
               if (pid < 0) {
                 // NOTE: this API should not be called in /demo mode
@@ -10235,6 +10278,7 @@ Email verified! You can close this tab or hit the back button.
                   }
                 )
                 .then(function (spammy: any) {
+                  console.log("In closure after getting pid");
                   let velocity = 1;
                   let active = true;
                   let classifications = [];
@@ -10269,6 +10313,8 @@ Email verified! You can close this tab or hit the back button.
                     let lang = detection.language;
                     let lang_confidence = detection.confidence;
 
+                    console.log("about to insert into comments");
+
                     return pgQueryP(
                       "INSERT INTO COMMENTS " +
                         "(pid, zid, txt, velocity, active, mod, uid, tweet_id, quote_src_url, anon, is_seed, created, tid, lang, lang_confidence) VALUES " +
@@ -10297,6 +10343,8 @@ Email verified! You can close this tab or hit the back button.
                         let comment = docs && docs[0];
                         let tid = comment && comment.tid;
                         // let createdTime = comment && comment.created;
+
+                        console.log("closure after creating comment");
 
                         if (bad || spammy || conv.strict_moderation) {
                           getNumberOfCommentsWithModerationStatus(
@@ -10378,6 +10426,8 @@ Email verified! You can close this tab or hit the back button.
                         );
                       },
                       function (err: { code: string | number }) {
+                        console.log("Oh no...");
+                        console.log(err);
                         if (err.code === "23505" || err.code === 23505) {
                           // duplicate comment
                           fail(res, 409, "polis_err_post_comment_duplicate", err);
@@ -14653,6 +14703,7 @@ Thanks for using Polis!
     CUSTOM_GET_COMMENTS,
     CUSTOM_GET_USERS,
     CUSTOM_GET_VOTES,
+    CUSTOM_GET_PARTICIPANTS,
     CUSTOM_POST_CONVERSATION,
     CUSTOM_POST_COMMENT,
     CUSTOM_POST_USER,
