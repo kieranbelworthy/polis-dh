@@ -10042,6 +10042,119 @@ Email verified! You can close this tab or hit the back button.
       });
   }
 
+  // Get Reports
+  function CUSTOM_GET_REPORTS(
+    req: { },
+    res: { json: (arg0: any) => void }
+  ) {
+    // let zid = req.p.zid;
+    // let uid = req.p.uid;
+
+    let reportsPromise = null;
+
+    // if (zid) {
+    //   reportsPromise = isModerator(zid, uid).then(
+    //     (doesOwnConversation: any) => {
+    //       if (!doesOwnConversation) {
+    //         throw "polis_err_permissions";
+    //       }
+    //       return pgQueryP("select * from reports where zid = ($1);", [zid]);
+    //     }
+    //   );
+    // } else {
+    //   reportsPromise = pgQueryP(
+    //     "select * from reports where zid in (select zid from conversations where owner = ($1));",
+    //     [uid]
+    //   );
+    // }
+
+    reportsPromise = pgQueryP(
+      "select * from reports;"
+    );
+
+    reportsPromise
+      //     Argument of type '(reports: any[]) => void | globalThis.Promise<void>' is not assignable to parameter of type '(value: unknown) => void | PromiseLike<void>'.
+      // Types of parameters 'reports' and 'value' are incompatible.
+      //     Type 'unknown' is not assignable to type 'any[]'.ts(2345)
+      // @ts-ignore
+      .then((reports: any[]) => {
+        let zids: any[] = [];
+        reports = reports.map((report: { zid: any; rid: any }) => {
+          zids.push(report.zid);
+          delete report.rid;
+          return report;
+        });
+
+        return res.json(reports);
+      })
+      .catch((err: string) => {
+        if (err === "polis_err_permissions") {
+          fail(res, 403, "polis_err_permissions");
+        } else if (
+          err ===
+          "polis_err_get_reports_should_not_specify_both_report_id_and_conversation_id"
+        ) {
+          fail(
+            res,
+            404,
+            "polis_err_get_reports_should_not_specify_both_report_id_and_conversation_id"
+          );
+        } else {
+          fail(res, 500, "polis_err_get_reports_misc", err);
+        }
+      });
+
+    // return reportsPromise;
+
+    // reportsPromise
+    //   //     Argument of type '(reports: any[]) => void | globalThis.Promise<void>' is not assignable to parameter of type '(value: unknown) => void | PromiseLike<void>'.
+    //   // Types of parameters 'reports' and 'value' are incompatible.
+    //   //     Type 'unknown' is not assignable to type 'any[]'.ts(2345)
+    //   // @ts-ignore
+    //   .then((reports: any[]) => {
+    //     let zids: any[] = [];
+    //     reports = reports.map((report: { zid: any; rid: any }) => {
+    //       zids.push(report.zid);
+    //       delete report.rid;
+    //       return report;
+    //     });
+
+    //     if (zids.length === 0) {
+    //       return res.json(reports);
+    //     }
+    //     return pgQueryP(
+    //       "select * from zinvites where zid in (" + zids.join(",") + ");",
+    //       []
+    //     ).then((zinvite_entries: any) => {
+    //       let zidToZinvite = _.indexBy(zinvite_entries, "zid");
+    //       reports = reports.map(
+    //         (report: { conversation_id: any; zid?: string | number }) => {
+    //           report.conversation_id = zidToZinvite[report.zid || ""]?.zinvite;
+    //           delete report.zid;
+    //           return report;
+    //         }
+    //       );
+    //       res.json(reports);
+    //     });
+    //   })
+    //   .catch((err: string) => {
+    //     if (err === "polis_err_permissions") {
+    //       fail(res, 403, "polis_err_permissions");
+    //     } else if (
+    //       err ===
+    //       "polis_err_get_reports_should_not_specify_both_report_id_and_conversation_id"
+    //     ) {
+    //       fail(
+    //         res,
+    //         404,
+    //         "polis_err_get_reports_should_not_specify_both_report_id_and_conversation_id"
+    //       );
+    //     } else {
+    //       fail(res, 500, "polis_err_get_reports_misc", err);
+    //     }
+    //   });
+  }
+
   function CUSTOM_POST_CONVERSATION(
     req: {
       body: {
@@ -10661,6 +10774,7 @@ Email verified! You can close this tab or hit the back button.
       }
     });
   }
+
   // END Custom API Endpoints
 
   function handle_GET_contexts(
@@ -14706,6 +14820,7 @@ Thanks for using Polis!
     CUSTOM_GET_USERS,
     CUSTOM_GET_VOTES,
     CUSTOM_GET_PARTICIPANTS,
+    CUSTOM_GET_REPORTS,
     CUSTOM_POST_CONVERSATION,
     CUSTOM_POST_COMMENT,
     CUSTOM_POST_USER,
