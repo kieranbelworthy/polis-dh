@@ -623,6 +623,13 @@ export function ensureParticipant(options: EnsureParticipantOptions = {}) {
   };
 }
 
+export async function ensureParticipantForRequest(
+  req: RequestWithP,
+  options: EnsureParticipantOptions = {}
+) {
+  return _ensureParticipantInternal(req, options);
+}
+
 /**
  * Optional version that doesn't fail if participant can't be created
  */

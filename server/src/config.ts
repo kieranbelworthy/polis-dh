@@ -99,6 +99,13 @@ export default {
   ddEnv: process.env.DD_ENV as string,
   dynamoDbEndpoint: process.env.DYNAMODB_ENDPOINT || null,
   emailTransportTypes: process.env.EMAIL_TRANSPORT_TYPES || null,
+  externalApiKey: process.env.EXTERNAL_API_KEY || null,
+  externalApiOwnerUserId: parseInt(
+    process.env.EXTERNAL_API_OWNER_USER_ID ||
+      process.env.EXTERNAL_API_OWNER_UID ||
+      "",
+    10
+  ),
   geminiApiKey: process.env.GEMINI_API_KEY || null,
   jwksUri: process.env.JWKS_URI || null,
   logLevel: process.env.SERVER_LOG_LEVEL as string,

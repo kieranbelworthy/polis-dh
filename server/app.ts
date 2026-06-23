@@ -143,6 +143,19 @@ import {
   handle_POST_votes,
   handle_POST_votes_bulk,
 } from "./src/routes/votes";
+import {
+  externalServiceAuth,
+  handle_GET_external_insights_groups,
+  handle_GET_external_insights_overview,
+  handle_GET_external_insights_statements,
+  handle_GET_external_insights_status,
+  handle_POST_external_comments,
+  handle_POST_external_conversations,
+  handle_POST_external_insights_refresh,
+  handle_POST_external_upvotes,
+  handle_POST_external_votes,
+  handle_POST_external_votes_batch,
+} from "./src/routes/external";
 import { handle_GET_implicit_conversation_generation } from "./src/routes/implicitConversation";
 import {
   handle_GET_users,
@@ -330,6 +343,58 @@ helpersInitialized.then(
     ////////////////////////////////////////////
     ////////////////////////////////////////////
     ////////////////////////////////////////////
+
+    app.all("/api/v3/external/*", externalServiceAuth);
+
+    app.post(
+      "/api/v3/external/conversations",
+      handle_POST_external_conversations
+    );
+
+    app.post(
+      "/api/v3/external/conversations/:conversationId/comments",
+      handle_POST_external_comments
+    );
+
+    app.post(
+      "/api/v3/external/conversations/:conversationId/votes",
+      handle_POST_external_votes
+    );
+
+    app.post(
+      "/api/v3/external/conversations/:conversationId/votes/batch",
+      handle_POST_external_votes_batch
+    );
+
+    app.post(
+      "/api/v3/external/conversations/:conversationId/upvotes",
+      handle_POST_external_upvotes
+    );
+
+    app.get(
+      "/api/v3/external/conversations/:conversationId/insights/status",
+      handle_GET_external_insights_status
+    );
+
+    app.get(
+      "/api/v3/external/conversations/:conversationId/insights/statements",
+      handle_GET_external_insights_statements
+    );
+
+    app.get(
+      "/api/v3/external/conversations/:conversationId/insights/groups",
+      handle_GET_external_insights_groups
+    );
+
+    app.get(
+      "/api/v3/external/conversations/:conversationId/insights/overview",
+      handle_GET_external_insights_overview
+    );
+
+    app.post(
+      "/api/v3/external/conversations/:conversationId/insights/refresh",
+      handle_POST_external_insights_refresh
+    );
 
     app.get("/api/v3/math/pca", handle_GET_math_pca);
 
