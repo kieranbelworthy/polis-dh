@@ -70,8 +70,6 @@
             :exec-fn user/run-with-repl}
            :test
            {:extra-paths ["test"]
-            :main-opts ["-m" "test-runner"]}}
- ;:jvm-opts ^:replace []
- :jvm-opts ["-Xmx4g"]}
+            :main-opts ["-m" "test-runner"]}}}
  ;:mvn/repos {"twitter4j" {:url "https://twitter4j.org/maven2"}}}
   

@@ -11,6 +11,7 @@ Set these environment variables on the Pol.is server:
 ```bash
 EXTERNAL_API_KEY=make-this-a-long-random-secret
 EXTERNAL_API_OWNER_USER_ID=123
+MATH_ENV=prod
 ```
 
 `EXTERNAL_API_OWNER_USER_ID` is the Pol.is user ID that will own the conversations created by this API.
@@ -18,6 +19,8 @@ EXTERNAL_API_OWNER_USER_ID=123
 That user must already exist in the Pol.is database.
 
 `EXTERNAL_API_OWNER_UID` also works as an alias.
+
+`MATH_ENV` must be the same for the web dyno and the worker dyno. Usually use `prod` on Heroku.
 
 Every request must send this header:
 
@@ -63,6 +66,10 @@ Vote values are:
 3. Send user votes into that conversation.
 4. Pol.is automatically queues math refresh work.
 5. Read insight endpoints and show them in your UI.
+
+The API write calls stay fast. The expensive Pol.is math runs in the background worker.
+
+If `mathRefreshQueued` is `false`, it usually means there is already a recent pending refresh for that conversation. That is okay.
 
 ## Create A Conversation
 
@@ -275,17 +282,98 @@ You usually do not need to call a refresh endpoint.
 
 When this API receives a new comment or vote, Pol.is queues a background math refresh for that conversation.
 
-The refresh is debounced. If many comments or votes arrive quickly, Pol.is will not create a new math task for every single write. It creates at most one automatic task per conversation every 30 seconds.
+The refresh is debounced. If many comments or votes arrive quickly, Pol.is will not create a new math task for every single write.
+
+Pol.is keeps one pending automatic math task per conversation. During a burst, it will touch that pending task at most once every 30 seconds.
 
 This keeps normal writes fast, while still letting the math worker update the insights in the background.
 
-The math worker must be running. On Heroku, this means the `worker` dyno must be scaled up.
+The math worker must be running for insights to update. On Heroku, this means the `worker` dyno must be scaled up.
 
 ```bash
 heroku ps:scale web=1 worker=1 -a your-heroku-app
 ```
 
+If the worker is off, comments and votes can still be saved. The insight endpoints may stay stale, and `mathReady` may stay `false`.
+
 After comments or votes are written, poll the status endpoint until `mathReady` is `true`.
+
+## Heroku Worker Memory
+
+The web dyno handles API requests.
+
+The worker dyno runs the expensive Pol.is math.
+
+After deploying this version, run the database migrations again. The new migration keeps the math refresh queue from growing without limit.
+
+If that migration has not run, automatic math refresh queueing will not work correctly.
+
+For the cheapest first smoke test, you can run only the web dyno:
+
+```bash
+heroku ps:scale web=1 worker=0 -a your-heroku-app
+```
+
+That proves conversation, comment, and vote writes work. It does not update math insights.
+
+No extra memory config is required for normal use. The worker defaults to using 65% of dyno memory for Java heap and leaves room for the rest of the process.
+
+Turn the worker on when you want math insights:
+
+```bash
+heroku ps:scale web=1 worker=1 -a your-heroku-app
+```
+
+If you see Heroku `R15` memory errors, do not scale blindly. First lower memory pressure or use a bigger worker dyno.
+
+The only worker memory setting you normally might change is `MATH_JVM_OPTS`.
+
+For a small dyno, try a fixed smaller heap:
+
+```bash
+heroku config:set MATH_JVM_OPTS="-J-Xmx384m -J-XX:+ExitOnOutOfMemoryError" -a your-heroku-app
+```
+
+For a larger worker dyno, you can allow more heap:
+
+```bash
+heroku config:set MATH_JVM_OPTS="-J-Xmx768m -J-XX:+ExitOnOutOfMemoryError" -a your-heroku-app
+```
+
+To go back to the safe default:
+
+```bash
+heroku config:unset MATH_JVM_OPTS -a your-heroku-app
+```
+
+## Conversation Size Limits
+
+Pol.is math gets more expensive as conversations get bigger.
+
+For your setup, your own backend is the main app, and Pol.is is the insight engine. Keep each mirrored Pol.is conversation bounded.
+
+The defaults are `100000` participants and `10000` statements/comments per conversation.
+
+You do not need to set these on Heroku unless you want lower limits.
+
+Simple meaning:
+
+`MATH_CUTOFF_MAX_PTPTS`
+: Maximum participants the math worker will keep in one conversation.
+
+`MATH_CUTOFF_MAX_CMNTS`
+: Maximum statements/comments the math worker will keep in one conversation.
+
+For early testing, you can use smaller numbers so mistakes are cheap:
+
+```bash
+heroku config:set \
+  MATH_CUTOFF_MAX_PTPTS=5000 \
+  MATH_CUTOFF_MAX_CMNTS=1000 \
+  -a your-heroku-app
+```
+
+These limits protect the math worker. They do not stop your own backend from storing more data in your own database.
 
 ## Manual Math Refresh
 

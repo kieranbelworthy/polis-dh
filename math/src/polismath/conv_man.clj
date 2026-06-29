@@ -112,6 +112,14 @@
           (.printStackTrace e)))
       (log/debug "Profile data for zid" (:zid conv) ": " prof))))
 
+(defn conv-update-opts
+  "Builds options for conv-update from runtime config."
+  [config]
+  (let [cutoffs (get-in config [:math :cutoffs])]
+    (cond-> {}
+      (:max-ptpts cutoffs) (assoc :max-ptpts (:max-ptpts cutoffs))
+      (:max-cmts cutoffs)  (assoc :max-cmts (:max-cmts cutoffs)))))
+
 
 
 ;; Conversation update functions
@@ -134,7 +142,7 @@
         pg (:postgres conv-man)]
     (log/info "Starting conversation update for zid:" (:zid conv))
     ;; Need to expose opts for conv-update through config... XXX
-    (let [updated-conv   (conv/conv-update conv votes)
+    (let [updated-conv   (conv/conv-update conv votes (conv-update-opts config))
           zid            (:zid updated-conv)
           finish-time    (System/currentTimeMillis)
           ; If this is a recompute, we'll have either :full or :reboot, ow/ want to send false
@@ -470,4 +478,3 @@
 
 
 :ok
-

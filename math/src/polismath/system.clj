@@ -51,11 +51,9 @@
 (defn full-system
   [config-overrides]
   (merge
-    (poller-system config-overrides)))
-    ;; This is a little silly to do this here, since we can just change the commands that get called to only
-    ;; run the poller system, but this is more expedient for the moment, and trying to get things smoothed out
-    ;; for developer meetup tomorrow :grimacing:
-    ;(task-system config-overrides)))
+    (poller-system config-overrides)
+    {:darwin      (component/using (darwin/create-darwin) [:config :postgres :conversation-manager])
+     :task-poller (component/using (tasks/create-task-poller) [:config :darwin :postgres :conversation-manager])}))
 
 (defn onyx-system
   "Creates a base-system and assocs in polismath onyx worker related components."
@@ -74,5 +72,4 @@
 (defn create-and-run-base-system!
   [config]
   (create-and-run-system! base-system config))
-
 

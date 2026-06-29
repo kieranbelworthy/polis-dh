@@ -49,7 +49,9 @@
                 :moderation {:polling-interval 1000}
                 :tasks {:polling-interval 1000}
                 :poll-from-days-ago 10}
-   :math       {:matrix-implementation :vectorz}
+   :math       {:matrix-implementation :vectorz
+                :cutoffs {:max-ptpts 100000
+                          :max-cmts 10000}}
    :logging    {:file "log/dev.log"
                 :level :warn}})
 
@@ -87,7 +89,7 @@
                                 :doc "This is the maximum size of a conversation before running in :large mode"}
    :math-cutoff-max-ptpts      {:path [:math :cutoffs :max-ptpts] :parse ->long
                                 :doc "This is the maximum number of participants before the conversation stops accepting new participants"}
-   :math-cutoff-max-cmnts      {:path [:math :cutoffs :max-ptpts] :parse ->long
+   :math-cutoff-max-cmnts      {:path [:math :cutoffs :max-cmts] :parse ->long
                                 :doc "This is the maximum number of comments before the conversation stops accepting new comments"}
    :math-schema-date           {:doc "This helps us version our mongo buckets."}
    ;; Should change these to be more abstract in key name; not hostedgraphite-apikey; just graphite-apikey etc XXX
@@ -195,4 +197,3 @@
 ;                     (get-config profile overrides))
 ;          :stop (do (log/info "<< Stopping config component")
 ;                    (reset! overrides nil)))
-

@@ -52,10 +52,18 @@
 
 
 (defmethod dispatch-task! :update_math
-  [{:as poller :keys [darwin conversation-manager]} task-record]
+  [{:as poller :keys [conversation-manager]} task-record]
   (log/debug "Dispatching update_math task for:" task-record)
   (async/thread
-    (conv-man/queue-message-batch! conversation-manager :votes (-> task-record :task_data :zid) [])))
+    (conv-man/queue-message-batch!
+      conversation-manager
+      :votes
+      (-> task-record :task_data :zid)
+      [])
+    (postgres/mark-task-complete!
+      (:postgres poller)
+      "update_math"
+      (:task_bucket task-record))))
 
 
 (defn poll
@@ -100,4 +108,3 @@
    (create-task-poller {}))
   ([options]
    (map->TaskPoller options)))
-

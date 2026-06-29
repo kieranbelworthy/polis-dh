@@ -527,7 +527,12 @@ async function queueExternalMathRefresh(
       "AND task_bucket = $2 " +
       "AND math_env = $3 " +
       "AND created > (now_as_millis() - $4) " +
-      ") RETURNING created;",
+      ") " +
+      "ON CONFLICT (math_env, task_type, task_bucket) " +
+      "WHERE finished_time IS NULL AND task_type = 'update_math' " +
+      "DO UPDATE SET created = now_as_millis(), task_data = EXCLUDED.task_data, attempts = 0 " +
+      "WHERE worker_tasks.created <= (now_as_millis() - $4) " +
+      "RETURNING created;",
     [
       JSON.stringify({
         zid: conversationNumericId,

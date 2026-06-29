@@ -1,12 +1,23 @@
 #!/bin/sh
 # Copyright (C) 2012-present, The Authors. This program is free software: you can redistribute it and/or  modify it under the terms of the GNU Affero General Public License, version 3, as published by the Free Software Foundation. This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License for more details. You should have received a copy of the GNU Affero General Public License along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
+MATH_WORKER_MODE="${MATH_WORKER_MODE:-full}"
+MATH_JVM_OPTS="${MATH_JVM_OPTS:--J-XX:MaxRAMPercentage=65 -J-XX:+ExitOnOutOfMemoryError}"
+MATH_WORKER_TIMEOUT_SECONDS="${MATH_WORKER_TIMEOUT_SECONDS:-14400}"
+MATH_WORKER_RESTART_DELAY_SECONDS="${MATH_WORKER_RESTART_DELAY_SECONDS:-10}"
 
 while [ 1 ]
 do
   echo "                                                           "
   echo "XXXXXXXXXXXXXXXXXX REBOOTING MATH WORKER XXXXXXXXXXXXXXXXXX"
   echo "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+  echo "mode=${MATH_WORKER_MODE}"
+  echo "jvm_opts=${MATH_JVM_OPTS}"
+  echo "timeout_seconds=${MATH_WORKER_TIMEOUT_SECONDS}"
+  echo "restart_delay_seconds=${MATH_WORKER_RESTART_DELAY_SECONDS}"
   echo "                                                           "
-  timeout -s KILL 14400 clojure -M:run full
+  timeout -s KILL "$MATH_WORKER_TIMEOUT_SECONDS" clojure $MATH_JVM_OPTS -M:run "$MATH_WORKER_MODE"
+  status="$?"
+  echo "Math worker exited with status ${status}; restarting in ${MATH_WORKER_RESTART_DELAY_SECONDS}s"
+  sleep "$MATH_WORKER_RESTART_DELAY_SECONDS"
 done
