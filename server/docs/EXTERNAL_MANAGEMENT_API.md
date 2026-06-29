@@ -61,7 +61,7 @@ Vote values are:
 1. Create a Pol.is conversation.
 2. Send user comments into that conversation.
 3. Send user votes into that conversation.
-4. Ask Pol.is to refresh math.
+4. Pol.is automatically queues math refresh work.
 5. Read insight endpoints and show them in your UI.
 
 ## Create A Conversation
@@ -124,11 +124,14 @@ Response:
   "conversationId": "abc123def",
   "externalParticipantId": "user_42",
   "participantId": 7,
-  "statementId": 3
+  "statementId": 3,
+  "mathRefreshQueued": true
 }
 ```
 
 Save `statementId` if you want to link your comment to the Pol.is statement.
+
+Pol.is automatically queues a background math refresh after the comment is saved.
 
 You can also add a vote from the comment author at the same time:
 
@@ -163,11 +166,14 @@ Response:
   "externalParticipantId": "user_99",
   "participantId": 8,
   "statementId": 3,
-  "vote": -1
+  "vote": -1,
+  "mathRefreshQueued": true
 }
 ```
 
 If the same user votes again on the same statement, Pol.is keeps the latest vote.
+
+Pol.is automatically queues a background math refresh after the vote is saved.
 
 Optional fields:
 
@@ -207,6 +213,7 @@ Response:
 ```json
 {
   "conversationId": "abc123def",
+  "mathRefreshQueued": true,
   "results": [
     {
       "status": "success",
@@ -225,6 +232,8 @@ Response:
 ```
 
 One bad vote does not stop the whole batch. Bad items return `"status": "error"`.
+
+Pol.is automatically queues a background math refresh if at least one vote succeeds.
 
 ## Add A Conversation Upvote
 
@@ -260,9 +269,29 @@ If the same user upvotes again, the response is still safe:
 }
 ```
 
-## Refresh Pol.is Math
+## How Pol.is Refreshes Math
 
-Call this after importing comments and votes.
+You usually do not need to call a refresh endpoint.
+
+When this API receives a new comment or vote, Pol.is queues a background math refresh for that conversation.
+
+The refresh is debounced. If many comments or votes arrive quickly, Pol.is will not create a new math task for every single write. It creates at most one automatic task per conversation every 30 seconds.
+
+This keeps normal writes fast, while still letting the math worker update the insights in the background.
+
+The math worker must be running. On Heroku, this means the `worker` dyno must be scaled up.
+
+```bash
+heroku ps:scale web=1 worker=1 -a your-heroku-app
+```
+
+After comments or votes are written, poll the status endpoint until `mathReady` is `true`.
+
+## Manual Math Refresh
+
+This endpoint is still available, but it is mostly for debugging, manual repair, or forcing a refresh after a special import.
+
+Normal backend code should not need it.
 
 It adds a background job. It does not return the final math immediately.
 
@@ -504,6 +533,6 @@ your comment id      -> Pol.is statementId
 
 Send comments and votes to Pol.is when they happen in your app.
 
-After a batch import, call the refresh endpoint.
+Pol.is queues math refresh work automatically after comments and votes.
 
 Then read the insight endpoints and show the results in your frontend.

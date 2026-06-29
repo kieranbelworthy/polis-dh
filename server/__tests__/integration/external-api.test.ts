@@ -79,6 +79,7 @@ describe("External Management API", () => {
       externalParticipantId: string;
       participantId: number;
       statementId: number;
+      mathRefreshQueued: boolean;
     };
   }
 
@@ -91,6 +92,16 @@ describe("External Management API", () => {
     );
     expect(result.rows.length).toBe(1);
     return Number(result.rows[0].zid);
+  }
+
+  async function getMathRefreshTaskCount(
+    conversationNumericId: number
+  ): Promise<number> {
+    const result = await pool.query(
+      "SELECT COUNT(*)::int AS count FROM worker_tasks WHERE task_type = 'update_math' AND task_bucket = $1;",
+      [conversationNumericId]
+    );
+    return Number(result.rows[0].count);
   }
 
   test("rejects missing and invalid API keys", async () => {
@@ -151,6 +162,8 @@ describe("External Management API", () => {
     expect(Number(externalParticipant.rows[0].uid)).toBe(
       Number(participant.rows[0].uid)
     );
+    expect(comment).toMatchObject({ mathRefreshQueued: true });
+    expect(await getMathRefreshTaskCount(conversationNumericId)).toBe(1);
   });
 
   test("records and changes latest votes by external participant ID", async () => {
@@ -172,6 +185,7 @@ describe("External Management API", () => {
     expect(firstVote.status).toBe(200);
     expect(firstVote.body.vote).toBe(-1);
     expect(firstVote.body.participantId).toBeGreaterThanOrEqual(0);
+    expect(typeof firstVote.body.mathRefreshQueued).toBe("boolean");
 
     const changedVote = await externalPost(
       `/api/v3/external/conversations/${conversationId}/votes`

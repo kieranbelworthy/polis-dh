@@ -20,6 +20,7 @@ import { failJson } from "../utils/fail";
 import { isDuplicateKey } from "../utils/common";
 import { getPca } from "../utils/pca";
 import type { PcaCacheItem } from "../utils/pca";
+import logger from "../utils/logger";
 import { handle_POST_comments } from "./comments";
 import { votesPost } from "./votes";
 
@@ -36,6 +37,14 @@ type ExternalVoteInput = {
   vote: number;
   highPriority?: boolean;
   starred?: boolean;
+};
+
+type ExternalVoteResult = {
+  externalParticipantId: string;
+  participantId: number;
+  statementId: number;
+  vote: number;
+  mathRefreshQueued: boolean;
 };
 
 type ExternalParticipant = {
@@ -127,6 +136,8 @@ class CapturingResponse {
     return this;
   }
 }
+
+const EXTERNAL_MATH_REFRESH_DEBOUNCE_MS = 30_000;
 
 function getExternalApiKey(): string | null {
   return process.env.EXTERNAL_API_KEY || Config.externalApiKey || null;
@@ -500,6 +511,54 @@ async function resolveOwnedExternalConversation(
     ownerUserId: Number(row.owner),
     topic: row.topic,
   };
+}
+
+async function queueExternalMathRefresh(
+  conversationNumericId: number,
+  mathUpdateType = "update",
+  debounceMs = EXTERNAL_MATH_REFRESH_DEBOUNCE_MS
+): Promise<boolean> {
+  const rows = (await pg.queryP(
+    "INSERT INTO worker_tasks (task_type, task_data, task_bucket, math_env) " +
+      "SELECT 'update_math', $1, $2, $3 " +
+      "WHERE NOT EXISTS ( " +
+      "SELECT 1 FROM worker_tasks " +
+      "WHERE task_type = 'update_math' " +
+      "AND task_bucket = $2 " +
+      "AND math_env = $3 " +
+      "AND created > (now_as_millis() - $4) " +
+      ") RETURNING created;",
+    [
+      JSON.stringify({
+        zid: conversationNumericId,
+        math_update_type: mathUpdateType,
+      }),
+      conversationNumericId,
+      Config.mathEnv,
+      debounceMs,
+    ]
+  )) as Array<{ created: number }>;
+
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+async function queueExternalMathRefreshBestEffort(
+  conversationNumericId: number,
+  mathUpdateType = "update"
+): Promise<boolean> {
+  try {
+    return await queueExternalMathRefresh(
+      conversationNumericId,
+      mathUpdateType
+    );
+  } catch (err) {
+    logger.error("polis_err_external_math_refresh_enqueue", {
+      conversationNumericId,
+      mathUpdateType,
+      err,
+    });
+    return false;
+  }
 }
 
 function toNumber(value: any, defaultValue = 0): number {
@@ -1231,22 +1290,15 @@ export async function handle_POST_external_insights_refresh(
       readOptionalString(body, "mathUpdateType", 100, ["math_update_type"]) ||
       "update";
 
-    await pg.queryP(
-      "INSERT INTO worker_tasks (task_type, task_data, task_bucket, math_env) " +
-        "VALUES ('update_math', $1, $2, $3);",
-      [
-        JSON.stringify({
-          zid: conversation.conversationNumericId,
-          math_update_type: mathUpdateType,
-        }),
-        conversation.conversationNumericId,
-        Config.mathEnv,
-      ]
+    const queued = await queueExternalMathRefresh(
+      conversation.conversationNumericId,
+      mathUpdateType,
+      0
     );
 
     res.status(200).json({
       conversationId: conversation.conversationId,
-      status: "queued",
+      status: queued ? "queued" : "already_queued",
       mathUpdateType,
     });
   } catch (err) {
@@ -1412,11 +1464,17 @@ export async function handle_POST_external_comments(
     }
 
     const participantId = capture.body?.currentPid || participant.participantId;
+    const mathRefreshQueued = await queueExternalMathRefreshBestEffort(
+      participant.conversationNumericId,
+      "external_comment"
+    );
+
     res.status(200).json({
       conversationId,
       externalParticipantId,
       participantId,
       statementId: capture.body?.tid,
+      mathRefreshQueued,
     });
   } catch (err) {
     sendExternalError(res, err, "polis_err_external_comment");
@@ -1448,7 +1506,7 @@ async function recordExternalVote(
   conversationId: string,
   input: ExternalVoteInput,
   participantCache?: Map<string, Promise<ExternalParticipant>>
-) {
+): Promise<ExternalVoteResult> {
   try {
     const participant = await resolveExternalParticipant(
       req,
@@ -1492,11 +1550,17 @@ async function recordExternalVote(
       );
     }, 100);
 
+    const mathRefreshQueued = await queueExternalMathRefreshBestEffort(
+      participant.conversationNumericId,
+      "external_vote"
+    );
+
     return {
       externalParticipantId: input.externalParticipantId,
       participantId: participant.participantId,
       statementId: input.statementId,
       vote: input.vote,
+      mathRefreshQueued,
     };
   } catch (err) {
     throw mapVoteError(err);
@@ -1542,6 +1606,7 @@ export async function handle_POST_external_votes_batch(
 
     const participantCache = new Map<string, Promise<ExternalParticipant>>();
     const results = [];
+    let mathRefreshQueued = false;
 
     for (const rawVote of votes) {
       const externalParticipantId =
@@ -1561,6 +1626,7 @@ export async function handle_POST_external_votes_batch(
           input,
           participantCache
         );
+        mathRefreshQueued = mathRefreshQueued || result.mathRefreshQueued;
         results.push({
           status: "success",
           externalParticipantId: result.externalParticipantId,
@@ -1583,6 +1649,7 @@ export async function handle_POST_external_votes_batch(
 
     res.status(200).json({
       conversationId,
+      mathRefreshQueued,
       results,
     });
   } catch (err) {
