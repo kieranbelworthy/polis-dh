@@ -23,18 +23,12 @@
     ;[semantic-csv.core :as s.csv]))
 
 
-;; Starting to spec out our domain model here and build generators for the pieces
-;; This will let us do generative testing and all other ilk of awesome things
+;; Starting to spec out our domain model here.
 
-(defn pos-int [gen-bound]
-  (s/with-gen
-    (s/and int? pos?)
-    (s/gen (s/int-in 0 gen-bound))))
-
-(s/def ::zid (pos-int 20))
-(s/def ::tid (pos-int 100))
-(s/def ::pid (pos-int 100))
-(s/def ::gid (pos-int 8))
+(s/def ::zid (s/and int? pos?))
+(s/def ::tid (s/and int? pos?))
+(s/def ::pid (s/and int? pos?))
+(s/def ::gid (s/and int? pos?))
 ;; QUESTION How do we have a generator that gives us monotonically increasing values?
 (s/def ::created (s/and int? pos?))
 (s/def ::vote #{-1 0 1 -1.0 1.0 0.0})

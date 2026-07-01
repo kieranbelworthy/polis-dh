@@ -280,24 +280,25 @@
 (defn poll-tasks
   ([component last-timestamp]
    (poll-tasks component last-timestamp nil))
-  ([component last-timestamp limit]
-   (->>
-     (query
-       component
-       (sql/format
-         (maybe-limit
-           {:select [:*]
-            :from [:worker_tasks]
-            :order-by [:created :task_type :task_bucket]
-            :where [:and
-                    [:> :created last-timestamp]
-                    [:= :math_env (-> component :config :math-env-string)]
-                    [:= :finished_time nil]]}
-           limit)))
-     (map (fn [task-record]
-            (-> task-record
-                (update :task_type keyword)
-                (update :task_data (comp #(cheshire/parse-string % true) #(.toString %)))))))))
+  ([component cursor limit]
+   (let [order-keys [:created :task_type :task_bucket]]
+     (->>
+       (query
+         component
+         (sql/format
+           (maybe-limit
+             {:select [:*]
+              :from [:worker_tasks]
+              :order-by order-keys
+              :where [:and
+                      (after-cursor-clause order-keys cursor)
+                      [:= :math_env (-> component :config :math-env-string)]
+                      [:= :finished_time nil]]}
+             limit)))
+       (map (fn [task-record]
+              (-> task-record
+                  (update :task_type keyword)
+                  (update :task_data (comp #(cheshire/parse-string % true) #(.toString %))))))))))
 
 (defn zid-from-rid
   [rid]
