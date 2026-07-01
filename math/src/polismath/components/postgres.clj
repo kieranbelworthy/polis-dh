@@ -129,36 +129,68 @@
   (map->Postgres {}))
 
 
+(defn maybe-limit
+  [query-data limit]
+  (if limit
+    (assoc query-data :limit limit)
+    query-data))
+
+(defn after-cursor-clause
+  [order-keys cursor]
+  (if (map? cursor)
+    (into
+      [:or]
+      (map-indexed
+        (fn [idx k]
+          (into
+            [:and]
+            (concat
+              (map (fn [prev-k] [:= prev-k (get cursor prev-k)])
+                   (take idx order-keys))
+              [[:> k (get cursor k)]])))
+        order-keys))
+    [:> (first order-keys) cursor]))
+
 (defn poll
   "Query for all data since last-vote-timestamp, given a db-spec"
-  [component last-vote-timestamp]
-  (log/info "poll" last-vote-timestamp)
-  (try
-    (query component
-           {:select [:*]
-            :from [:votes]
-            :order-by [:zid :tid :pid :created]
-            :where [:> :created last-vote-timestamp]})
-    (catch Exception e
-      (log/error "polling failed " (.getMessage e))
-      (.printStackTrace e)
-      [])))
+  ([component last-vote-timestamp]
+   (poll component last-vote-timestamp nil))
+  ([component cursor limit]
+   (let [order-keys [:created :zid :tid :pid]]
+     (log/info "poll" cursor "limit" limit)
+     (try
+       (query component
+              (maybe-limit
+                {:select [:*]
+                 :from [:votes]
+                 :order-by order-keys
+                 :where (after-cursor-clause order-keys cursor)}
+                limit))
+       (catch Exception e
+         (log/error "polling failed " (.getMessage e))
+         (.printStackTrace e)
+         [])))))
 
 
 (defn mod-poll
   "Moderation query: basically look for when things were last modified, since this is the only time they will
   have been moderated."
-  [component last-mod-timestamp]
-  (log/info "modpoll" last-mod-timestamp)
-  (try
-    (query component
-           {:select [:*]
-            :from [:comments]
-            :order-by [:zid :tid :modified]
-            :where [:> :modified last-mod-timestamp]})
-    (catch Exception e
-      (log/error "moderation polling failed " (.getMessage e))
-      [])))
+  ([component last-mod-timestamp]
+   (mod-poll component last-mod-timestamp nil))
+  ([component cursor limit]
+   (let [order-keys [:modified :zid :tid]]
+     (log/info "modpoll" cursor "limit" limit)
+     (try
+       (query component
+              (maybe-limit
+                {:select [:*]
+                 :from [:comments]
+                 :order-by order-keys
+                 :where (after-cursor-clause order-keys cursor)}
+                limit))
+       (catch Exception e
+         (log/error "moderation polling failed " (.getMessage e))
+         [])))))
 
 
 (defn get-zid-from-zinvite
@@ -246,21 +278,26 @@
 
 
 (defn poll-tasks
-  [component last-timestamp]
-  (->>
-    (query
-      component
-      (sql/format
-        {:select [:*]
-         :from [:worker_tasks]
-         :where [:and
-                 [:> :created last-timestamp]
-                 [:= :math_env (-> component :config :math-env-string)]
-                 [:= :finished_time nil]]}))
-    (map (fn [task-record]
-           (-> task-record
-               (update :task_type keyword)
-               (update :task_data (comp #(cheshire/parse-string % true) #(.toString %))))))))
+  ([component last-timestamp]
+   (poll-tasks component last-timestamp nil))
+  ([component last-timestamp limit]
+   (->>
+     (query
+       component
+       (sql/format
+         (maybe-limit
+           {:select [:*]
+            :from [:worker_tasks]
+            :order-by [:created :task_type :task_bucket]
+            :where [:and
+                    [:> :created last-timestamp]
+                    [:= :math_env (-> component :config :math-env-string)]
+                    [:= :finished_time nil]]}
+           limit)))
+     (map (fn [task-record]
+            (-> task-record
+                (update :task_type keyword)
+                (update :task_data (comp #(cheshire/parse-string % true) #(.toString %)))))))))
 
 (defn zid-from-rid
   [rid]
@@ -474,5 +511,3 @@
   :endcomment)
 
 :ok
-
-

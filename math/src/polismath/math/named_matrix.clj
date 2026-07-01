@@ -2,9 +2,7 @@
 
 (ns polismath.math.named-matrix
   (:require [clojure.core.matrix :as matrix]
-            [clojure.spec.alpha :as s]
-            [clojure.spec.gen.alpha :as gen]
-            [clojure.test.check.generators :as generators])
+            [clojure.spec.alpha :as s])
   ;; Again, move to 
   (:use polismath.utils))
 
@@ -158,42 +156,14 @@
 
 
 
-(defn named-matrix-gen-of
-  [gen]
-  (gen/bind
-    (gen/tuple
-      (gen/such-that not-empty (gen/vector-distinct (gen/such-that pos? (gen/int))))
-      (gen/such-that not-empty (gen/vector-distinct (gen/such-that pos? (gen/int)))))
-    (fn [[rownames colnames]]
-      (gen/fmap
-        (fn [matrix] (named-matrix rownames colnames matrix))
-        (gen/vector
-          (gen/vector gen (count colnames))
-          (count rownames))))))
-
-;(gen/sample (named-matrix-gen-of (s/gen #{-1 0 1 nil})))
-
-
 (s/def ::NamedMatrix
-  (s/with-gen
-    (s/and
-      (partial satisfies? PNamedMatrix)
-      ;(comp get-matrix matrix/matrix?)
-      (comp matrix/vec? rownames)
-      (comp matrix/vec? colnames)
-      (comp distinct rownames)
-      (comp distinct colnames))
-    ;; Silly... need way smarter generators here; And maybe actually the generator shouldn't be on this entity, since a named
-    ;(clojure.test.check.generators/elements)
-    #(named-matrix-gen-of (gen/double))))
-
-;(gen/sample (s/gen ::NamedMatrix))
-
-
-;(gen/frequency)
-;(gen/double*)
-;(gen/vector-of)
-;(gen/sample (gen/double* {:min 0 :max 1 :NaN? false :infinite? false}) 100)
+  (s/and
+    (partial satisfies? PNamedMatrix)
+    ;(comp get-matrix matrix/matrix?)
+    (comp matrix/vec? rownames)
+    (comp matrix/vec? colnames)
+    (comp distinct rownames)
+    (comp distinct colnames)))
 
 
 (defmethod print-method NamedMatrix
@@ -204,8 +174,6 @@
       " :colnames " (into [] (colnames nm))
       " :matrix " (get-matrix nm)
       "}")))
-
-;(gen/sample (s/gen (s/cat :nm ::NamedMatrix :columns coll?)))
 
 (s/fdef zero-out-columns
   :args (s/cat :nm ::NamedMatrix :columns coll?)
@@ -228,25 +196,6 @@
           m
           columns)]
     (named-matrix rows cols m')))
-
-; Just trying to figure out how the hell function checking really works... 
-(require '[clojure.spec.test.alpha :as stest])
-(stest/check `zero-out-columns)
-
-
-(s/fdef whatever
-  :args (s/cat :x (s/and number? #(not= ##NaN %) #(not= 0 %)))
-  :ret number?
-  :fn #(= (-> % :ret (* 2) (-> % :args :x))))
-(defn whatever
-  [x]
-  (/ 2 x))
-
-;(gen/sample (s/gen number?))
-(stest/check `whatever)
-
-
-
 
 (defn named-matrix-reader
   [{:keys [rownames colnames matrix]}]
@@ -275,4 +224,3 @@
     (remove (set row-names) (rownames nmat))))
 
 :ok
-

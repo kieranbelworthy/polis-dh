@@ -71,12 +71,13 @@
   (log/debug ">> Initializing task poller loop")
   (let [poller-config (-> config :poller)
         start-polling-from (- (System/currentTimeMillis) (* (:poll-from-days-ago poller-config) 1000 60 60 24))
-        polling-interval (or (-> poller-config :tasks :polling-interval) 1000)]
+        polling-interval (or (-> poller-config :tasks :polling-interval) 1000)
+        batch-size (:batch-size poller-config)]
     (async/thread
       (loop [last-timestamp start-polling-from]
         (log/debug "polling tasks from" last-timestamp)
         (when-not (async/poll! kill-chan) ;; TODO When we upgrade clojure & clojure.core.async, should do this
-          (let [results (postgres/poll-tasks postgres last-timestamp)
+          (let [results (postgres/poll-tasks postgres last-timestamp batch-size)
                 last-timestamp (apply max 0 last-timestamp (map :created results))]
             (log/debug "new last-timestamp" last-timestamp)
             ;; For each chunk of votes, for each conversation, send to the appropriate spout

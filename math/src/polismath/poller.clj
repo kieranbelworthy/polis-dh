@@ -14,17 +14,18 @@
   (let [poller-config (-> config :poller)
         start-polling-from (- (System/currentTimeMillis) (* (:poll-from-days-ago poller-config) 1000 60 60 24))
         polling-interval (or (-> poller-config (get message-type) :polling-interval) 1000)
+        batch-size (:batch-size poller-config)
         {:keys [zid-blocklist zid-allowlist]} poller-config
-        [poll-function timestamp-key]
-        (get {:votes [postgres/poll :created]
-              :moderation [postgres/mod-poll :modified]}
+        [poll-function cursor-keys]
+        (get {:votes [postgres/poll [:created :zid :tid :pid]]
+              :moderation [postgres/mod-poll [:modified :zid :tid]]}
              message-type)]
-    (go-loop [last-timestamp start-polling-from]
+    (go-loop [cursor start-polling-from]
       (when-not (async/poll! kill-chan)
-        (log/info "Polling" message-type ">" last-timestamp)
-        (let [results (poll-function postgres last-timestamp)
+        (log/info "Polling" message-type ">" cursor)
+        (let [results (poll-function postgres cursor batch-size)
               grouped-batches (group-by :zid results)
-              last-timestamp (apply max 0 last-timestamp (map timestamp-key results))]
+              cursor (or (some-> results last (select-keys cursor-keys)) cursor)]
           ; For each chunk of votes, for each conversation, send to the appropriate spout
           (doseq [[zid batch] grouped-batches]
             (when (cond zid-allowlist (get zid-allowlist zid)
@@ -34,7 +35,7 @@
               (conv-man/queue-message-batch! conversation-manager message-type zid batch)))
           ; Update timestamp
           (<! (async/timeout polling-interval))
-          (recur last-timestamp))))))
+          (recur cursor))))))
 
 
 
@@ -56,5 +57,3 @@
    (create-poller message-type {}))
   ([message-type options]
    (map->Poller (merge options {:message-type message-type}))))
-
-

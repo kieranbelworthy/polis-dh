@@ -2,9 +2,23 @@
 # Copyright (C) 2012-present, The Authors. This program is free software: you can redistribute it and/or  modify it under the terms of the GNU Affero General Public License, version 3, as published by the Free Software Foundation. This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Affero General Public License for more details. You should have received a copy of the GNU Affero General Public License along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
 MATH_WORKER_MODE="${MATH_WORKER_MODE:-full}"
-MATH_JVM_OPTS="${MATH_JVM_OPTS:--J-XX:MaxRAMPercentage=65 -J-XX:+ExitOnOutOfMemoryError}"
+MATH_JVM_PROFILE="${MATH_JVM_PROFILE:-heroku-512m}"
 MATH_WORKER_TIMEOUT_SECONDS="${MATH_WORKER_TIMEOUT_SECONDS:-14400}"
 MATH_WORKER_RESTART_DELAY_SECONDS="${MATH_WORKER_RESTART_DELAY_SECONDS:-10}"
+
+case "$MATH_JVM_PROFILE" in
+  heroku-512m)
+    DEFAULT_MATH_JVM_OPTS="-J-Xms64m -J-Xmx220m -J-Xss512k -J-XX:MaxMetaspaceSize=128m -J-XX:ReservedCodeCacheSize=48m -J-XX:MaxDirectMemorySize=32m -J-XX:+UseSerialGC -J-XX:ActiveProcessorCount=2 -J-XX:+ExitOnOutOfMemoryError"
+    ;;
+  container)
+    DEFAULT_MATH_JVM_OPTS="-J-XX:+UseContainerSupport -J-XX:MaxRAMPercentage=65 -J-Xss512k -J-XX:+ExitOnOutOfMemoryError"
+    ;;
+  *)
+    DEFAULT_MATH_JVM_OPTS="$MATH_JVM_PROFILE"
+    ;;
+esac
+
+MATH_JVM_OPTS="${MATH_JVM_OPTS:-$DEFAULT_MATH_JVM_OPTS}"
 
 while [ 1 ]
 do
@@ -12,6 +26,7 @@ do
   echo "XXXXXXXXXXXXXXXXXX REBOOTING MATH WORKER XXXXXXXXXXXXXXXXXX"
   echo "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
   echo "mode=${MATH_WORKER_MODE}"
+  echo "jvm_profile=${MATH_JVM_PROFILE}"
   echo "jvm_opts=${MATH_JVM_OPTS}"
   echo "timeout_seconds=${MATH_WORKER_TIMEOUT_SECONDS}"
   echo "restart_delay_seconds=${MATH_WORKER_RESTART_DELAY_SECONDS}"

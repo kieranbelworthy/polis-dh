@@ -53,23 +53,23 @@
         environ/environ {:mvn/version "1.2.0"}
         mount/mount {:mvn/version "0.1.17"}
         honeysql/honeysql {:mvn/version "1.0.461"}
-        ;; Dev
-        org.clojure/test.check {:mvn/version "1.1.1"}
-        irresponsible/tentacles {:mvn/version "0.6.9"}
-        techascent/tech.ml.dataset {:mvn/version "6.104"}}
+        irresponsible/tentacles {:mvn/version "0.6.9"}}
  :aliases {:dev 
            {:extra-paths ["dev" "test"]
             :extra-deps {cider/cider-nrepl {:mvn/version "0.30.0"}
-                         metasoarous/oz {:mvn/version "2.0.0-alpha5"}}
+                         metasoarous/oz {:mvn/version "2.0.0-alpha5"}
+                         org.clojure/test.check {:mvn/version "1.1.1"}}
             :main-opts ["-m" "nrepl.cmdline" "--middleware" "[cider.nrepl/cider-middleware]"]}
            :run
            {:main-opts ["-m" "polismath.runner"]}
            :dev-poller
            {:extra-paths ["dev" "test"]
-            :extra-deps {cider/cider-nrepl {:mvn/version "0.30.0"}}
+            :extra-deps {cider/cider-nrepl {:mvn/version "0.30.0"}
+                         org.clojure/test.check {:mvn/version "1.1.1"}}
             :exec-fn user/run-with-repl}
            :test
            {:extra-paths ["test"]
+            :extra-deps {org.clojure/test.check {:mvn/version "1.1.1"}}
             :main-opts ["-m" "test-runner"]}}}
  ;:mvn/repos {"twitter4j" {:url "https://twitter4j.org/maven2"}}}
   

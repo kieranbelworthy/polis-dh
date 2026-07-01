@@ -19,11 +19,7 @@
     [plumbing.graph :as graph]
     [bigml.sampling.simple :as sampling]
     ;[alex-and-georges.debug-repl :as dbr]
-    [taoensso.timbre :as log]
-    [clojure.spec.gen.alpha :as gen]
-    [clojure.test.check.generators :as generators]
-    [tech.v3.dataset :as ds]
-    [tech.v3.datatype :as dt]))
+    [taoensso.timbre :as log]))
     ;[semantic-csv.core :as s.csv]))
 
 
@@ -934,4 +930,3 @@
 
 
 :ok
-

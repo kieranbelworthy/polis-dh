@@ -48,7 +48,8 @@
    :poller     {:votes {:polling-interval 1000}
                 :moderation {:polling-interval 1000}
                 :tasks {:polling-interval 1000}
-                :poll-from-days-ago 10}
+                :poll-from-days-ago 10
+                :batch-size 1000}
    :math       {:matrix-implementation :vectorz
                 :cutoffs {:max-ptpts 100000
                           :max-cmts 10000}}
@@ -103,6 +104,8 @@
                                 :doc "The polling interval for votes, in milliseconds"}
    :mod-polling-interval       {:parse ->long :path [:poller :moderation :polling-interval]
                                 :doc "The polling interval for moderation, in milliseconds"}
+   :math-poll-batch-size       {:parse ->long :path [:poller :batch-size]
+                                :doc "The maximum rows a math poller reads per database query"}
    ;:initial-polling-timestamp  {:parse ->long :path [:poller :initial-polling-timestamp]
    ;                             :doc "The initial vote and mod polling timestamp (only load convs with votes later than this)"}
    :poll-from-days-ago         {:parse ->long :path [:poller :poll-from-days-ago]}
