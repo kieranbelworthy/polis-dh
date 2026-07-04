@@ -520,18 +520,18 @@ async function queueExternalMathRefresh(
 ): Promise<boolean> {
   const rows = (await pg.queryP(
     "INSERT INTO worker_tasks (task_type, task_data, task_bucket, math_env) " +
-      "SELECT 'update_math', $1, $2, $3 " +
+      "SELECT 'update_math'::varchar, $1::jsonb, $2::bigint, $3::varchar " +
       "WHERE NOT EXISTS ( " +
       "SELECT 1 FROM worker_tasks " +
       "WHERE task_type = 'update_math' " +
-      "AND task_bucket = $2 " +
-      "AND math_env = $3 " +
-      "AND created > (now_as_millis() - $4) " +
+      "AND task_bucket = $2::bigint " +
+      "AND math_env = $3::varchar " +
+      "AND created > (now_as_millis() - $4::bigint) " +
       ") " +
       "ON CONFLICT (math_env, task_type, task_bucket) " +
       "WHERE finished_time IS NULL AND task_type = 'update_math' " +
       "DO UPDATE SET created = now_as_millis(), task_data = EXCLUDED.task_data, attempts = 0 " +
-      "WHERE worker_tasks.created <= (now_as_millis() - $4) " +
+      "WHERE worker_tasks.created <= (now_as_millis() - $4::bigint) " +
       "RETURNING created;",
     [
       JSON.stringify({

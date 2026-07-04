@@ -119,35 +119,27 @@ function query_readOnly(queryString: string, ...args: any[]) {
   return queryImpl(readPool, queryString, ...args);
 }
 
-function queryP_impl<T>(pool: Pool, queryString?: string, params?: any[]) {
+function queryP_impl<T>(
+  pool: Pool,
+  queryString?: string,
+  params?: any[]
+): Promise<T[]> {
   if (!isString(queryString)) {
     return Promise.reject("query_was_not_string");
   }
 
-  return new Promise(function (resolve, reject) {
-    queryImpl(
-      pool,
-      queryString,
-      params,
-      function (err: Error | null, result: { rows: T[] }) {
-        if (err) {
-          return reject(err);
-        }
-        if (!result || !result.rows) {
-          // caller is responsible for testing if there are results
-          return resolve([]);
-        }
-        resolve(result.rows);
-      }
-    );
-  });
+  return (
+    queryImpl(pool, queryString, params || [], function () {}) as Promise<
+      T[] | undefined
+    >
+  ).then((rows) => rows || []);
 }
 
-function queryP<T>(queryString: string, ...args: any[]) {
+function queryP<T>(queryString: string, ...args: any[]): Promise<T[]> {
   return queryP_impl<T>(readWritePool, queryString, ...args);
 }
 
-function queryP_readOnly<T>(queryString: string, ...args: any[]) {
+function queryP_readOnly<T>(queryString: string, ...args: any[]): Promise<T[]> {
   return queryP_impl<T>(readPool, queryString, ...args);
 }
 
