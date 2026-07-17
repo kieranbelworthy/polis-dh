@@ -18,6 +18,12 @@ import {
 import { DEFAULTS } from "../utils/constants";
 import { failJson } from "../utils/fail";
 import { isDuplicateKey } from "../utils/common";
+import { getClusterAssignments } from "../utils/commentClusters";
+import {
+  loadDelphiTopicRuns,
+  type DelphiTopic,
+  type DelphiTopicRun,
+} from "../utils/delphiTopics";
 import { getPca } from "../utils/pca";
 import type { PcaCacheItem } from "../utils/pca";
 import logger from "../utils/logger";
@@ -104,6 +110,14 @@ type ExternalStatementInsight = VoteStats & {
   groupAwareConsensus: number | null;
   commentExtremity: number | null;
   groupStats: Record<string, VoteStats>;
+};
+
+type ExternalThemeStatement = ReturnType<typeof compactThemeStatement>;
+
+type ThemeStatementAssignment = {
+  statement: ExternalStatementInsight;
+  confidence: number | null;
+  distanceToCentroid: number | null;
 };
 
 class ExternalApiError extends Error {
@@ -832,6 +846,500 @@ async function buildExternalStatementInsights(
   });
 }
 
+function getDelphiRunLayerIds(run: DelphiTopicRun): number[] {
+  return Array.from(new Set(run.topics.map((topic) => topic.layerId))).sort(
+    (left, right) => left - right
+  );
+}
+
+function themeLayerGranularity(
+  layerId: number,
+  availableLayerIds: number[]
+): "fine" | "intermediate" | "coarse" | "only" {
+  if (availableLayerIds.length <= 1) {
+    return "only";
+  }
+  if (layerId === availableLayerIds[0]) {
+    return "fine";
+  }
+  if (layerId === availableLayerIds[availableLayerIds.length - 1]) {
+    return "coarse";
+  }
+  return "intermediate";
+}
+
+function readThemeLayerSelection(
+  query: Record<string, any>,
+  availableLayerIds: number[]
+): { requested: string; layerIds: number[] } {
+  const raw = readAliasedValue(query, "layer", ["layerId", "layer_id"]);
+  const requested =
+    raw === undefined || raw === null || raw === ""
+      ? "coarse"
+      : typeof raw === "string"
+      ? raw.trim().toLowerCase()
+      : typeof raw === "number" && Number.isInteger(raw)
+      ? String(raw)
+      : "";
+
+  if (!requested) {
+    throw new ExternalApiError(400, "polis_err_param_invalid_layer");
+  }
+  if (availableLayerIds.length === 0) {
+    if (
+      requested !== "all" &&
+      requested !== "fine" &&
+      requested !== "coarse" &&
+      !/^\d+$/.test(requested)
+    ) {
+      throw new ExternalApiError(400, "polis_err_param_invalid_layer");
+    }
+    return { requested, layerIds: [] };
+  }
+  if (requested === "all") {
+    return { requested, layerIds: availableLayerIds };
+  }
+  if (requested === "fine") {
+    return { requested, layerIds: [availableLayerIds[0]] };
+  }
+  if (requested === "coarse") {
+    return {
+      requested,
+      layerIds: [availableLayerIds[availableLayerIds.length - 1]],
+    };
+  }
+  if (!/^\d+$/.test(requested)) {
+    throw new ExternalApiError(400, "polis_err_param_invalid_layer");
+  }
+  const layerId = Number.parseInt(requested, 10);
+  if (!availableLayerIds.includes(layerId)) {
+    throw new ExternalApiError(400, "polis_err_param_invalid_layer");
+  }
+  return { requested, layerIds: [layerId] };
+}
+
+function readLayerMetric(value: unknown, layerId: number): number | null {
+  if (typeof value === "number" || typeof value === "string") {
+    return toNullableNumber(value);
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const metrics = value as Record<string, unknown>;
+  return toNullableNumber(
+    metrics[`layer${layerId}`] ?? metrics[String(layerId)]
+  );
+}
+
+function getThemeStatementAssignments(
+  topic: DelphiTopic,
+  clusterAssignments: Map<number, any>,
+  statementsById: Map<number, ExternalStatementInsight>,
+  includeInactive: boolean
+): ThemeStatementAssignment[] {
+  const assignments: ThemeStatementAssignment[] = [];
+  const clusterField = `layer${topic.layerId}_cluster_id`;
+
+  for (const [statementId, rawAssignment] of clusterAssignments.entries()) {
+    const assignment = rawAssignment as Record<string, unknown>;
+    if (toNumber(assignment[clusterField], Number.NaN) !== topic.clusterId) {
+      continue;
+    }
+    const statement = statementsById.get(statementId);
+    if (!statement || (!includeInactive && !statement.active)) {
+      continue;
+    }
+    assignments.push({
+      statement,
+      confidence: readLayerMetric(assignment.cluster_confidence, topic.layerId),
+      distanceToCentroid: readLayerMetric(
+        assignment.distance_to_centroid,
+        topic.layerId
+      ),
+    });
+  }
+
+  return assignments.sort(
+    (left, right) => left.statement.statementId - right.statement.statementId
+  );
+}
+
+function aggregateThemeVoteStats(
+  assignments: ThemeStatementAssignment[],
+  groupId?: string
+): VoteStats {
+  let agreeCount = 0;
+  let disagreeCount = 0;
+  let passCount = 0;
+  let voteCount = 0;
+
+  for (const { statement } of assignments) {
+    const stats = groupId ? statement.groupStats[groupId] : statement;
+    if (!stats) {
+      continue;
+    }
+    agreeCount += stats.agreeCount;
+    disagreeCount += stats.disagreeCount;
+    passCount += stats.passCount;
+    voteCount += stats.voteCount;
+  }
+
+  return buildVoteStats(agreeCount, disagreeCount, passCount, voteCount);
+}
+
+function weightedThemeMean(
+  assignments: ThemeStatementAssignment[],
+  value: (statement: ExternalStatementInsight) => number | null
+): number | null {
+  let weightedTotal = 0;
+  let totalWeight = 0;
+
+  for (const { statement } of assignments) {
+    const metric = value(statement);
+    if (
+      metric === null ||
+      !Number.isFinite(metric) ||
+      statement.voteCount <= 0
+    ) {
+      continue;
+    }
+    weightedTotal += metric * statement.voteCount;
+    totalWeight += statement.voteCount;
+  }
+
+  return totalWeight > 0 ? roundScore(weightedTotal / totalWeight) : null;
+}
+
+function meanAssignmentMetric(
+  assignments: ThemeStatementAssignment[],
+  value: (assignment: ThemeStatementAssignment) => number | null
+): number | null {
+  const values = assignments
+    .map(value)
+    .filter((metric): metric is number => metric !== null);
+  return values.length > 0
+    ? roundScore(
+        values.reduce((total, metric) => total + metric, 0) / values.length
+      )
+    : null;
+}
+
+function compactThemeStatement(assignment: ThemeStatementAssignment) {
+  const { statement, confidence, distanceToCentroid } = assignment;
+  return {
+    statementId: statement.statementId,
+    text: statement.text,
+    voteCount: statement.voteCount,
+    agreeCount: statement.agreeCount,
+    disagreeCount: statement.disagreeCount,
+    passCount: statement.passCount,
+    agreement: statement.agreement,
+    disagreement: statement.disagreement,
+    pass: statement.pass,
+    active: statement.active,
+    moderationStatus: statement.moderationStatus,
+    majority: statement.majority,
+    consensusScore: statement.consensusScore,
+    divisivenessScore: statement.divisivenessScore,
+    groupAwareConsensus: statement.groupAwareConsensus,
+    confidence,
+    distanceToCentroid,
+  };
+}
+
+function detailedThemeStatement(
+  assignment: ThemeStatementAssignment,
+  includeGroupStats: boolean
+) {
+  const { groupStats, ...statement } = assignment.statement;
+  return {
+    ...statement,
+    ...(includeGroupStats ? { groupStats } : {}),
+    confidence: assignment.confidence,
+    distanceToCentroid: assignment.distanceToCentroid,
+  };
+}
+
+function takeThemeStatements(
+  assignments: ThemeStatementAssignment[],
+  limit: number,
+  compare: (
+    left: ThemeStatementAssignment,
+    right: ThemeStatementAssignment
+  ) => number
+): ExternalThemeStatement[] {
+  return [...assignments]
+    .sort(
+      (left, right) =>
+        compare(left, right) ||
+        left.statement.statementId - right.statement.statementId
+    )
+    .slice(0, limit)
+    .map(compactThemeStatement);
+}
+
+function representativeThemeStatements(
+  assignments: ThemeStatementAssignment[],
+  limit: number
+): ExternalThemeStatement[] {
+  return takeThemeStatements(assignments, limit, (left, right) => {
+    const leftConfidence = left.confidence ?? Number.NEGATIVE_INFINITY;
+    const rightConfidence = right.confidence ?? Number.NEGATIVE_INFINITY;
+    if (leftConfidence !== rightConfidence) {
+      return rightConfidence - leftConfidence;
+    }
+    const leftDistance = left.distanceToCentroid ?? Number.POSITIVE_INFINITY;
+    const rightDistance = right.distanceToCentroid ?? Number.POSITIVE_INFINITY;
+    if (leftDistance !== rightDistance) {
+      return leftDistance - rightDistance;
+    }
+    return right.statement.voteCount - left.statement.voteCount;
+  });
+}
+
+type ThemeRespondentCounts = {
+  byTheme: Map<string, number>;
+  byThemeAndGroup: Map<string, Map<string, number>>;
+};
+
+async function loadThemeRespondentCounts(
+  conversationNumericId: number,
+  assignmentsByTheme: Map<string, ThemeStatementAssignment[]>,
+  groupMemberSets: Map<string, Set<number>>
+): Promise<ThemeRespondentCounts> {
+  const themeIds: string[] = [];
+  const statementIds: number[] = [];
+
+  for (const [themeId, assignments] of assignmentsByTheme.entries()) {
+    for (const { statement } of assignments) {
+      themeIds.push(themeId);
+      statementIds.push(statement.statementId);
+    }
+  }
+  const counts: ThemeRespondentCounts = {
+    byTheme: new Map<string, number>(),
+    byThemeAndGroup: new Map<string, Map<string, number>>(),
+  };
+  if (statementIds.length === 0) {
+    return counts;
+  }
+
+  const groupIds: string[] = [];
+  const groupParticipantIds: number[] = [];
+  for (const [groupId, memberIds] of groupMemberSets.entries()) {
+    for (const participantId of memberIds) {
+      groupIds.push(groupId);
+      groupParticipantIds.push(participantId);
+    }
+  }
+
+  const themeCountQuery = pg.queryP_readOnly<{
+    theme_id: string;
+    respondent_count: number;
+  }>(
+    "WITH selected_theme_statements(theme_id, tid) AS (" +
+      "SELECT * FROM UNNEST($2::text[], $3::int[])" +
+      ") SELECT selected.theme_id, COUNT(DISTINCT votes.pid)::int AS respondent_count " +
+      "FROM selected_theme_statements selected " +
+      "INNER JOIN votes_latest_unique votes ON votes.tid = selected.tid " +
+      "WHERE votes.zid = ($1) GROUP BY selected.theme_id;",
+    [conversationNumericId, themeIds, statementIds]
+  );
+  const groupCountQuery =
+    groupParticipantIds.length > 0
+      ? pg.queryP_readOnly<{
+          theme_id: string;
+          group_id: string;
+          respondent_count: number;
+        }>(
+          "WITH selected_theme_statements(theme_id, tid) AS (" +
+            "SELECT * FROM UNNEST($2::text[], $3::int[])" +
+            "), selected_group_members(group_id, pid) AS (" +
+            "SELECT * FROM UNNEST($4::text[], $5::int[])" +
+            ") SELECT selected.theme_id, members.group_id, " +
+            "COUNT(DISTINCT votes.pid)::int AS respondent_count " +
+            "FROM selected_theme_statements selected " +
+            "INNER JOIN votes_latest_unique votes ON votes.tid = selected.tid " +
+            "INNER JOIN selected_group_members members ON members.pid = votes.pid " +
+            "WHERE votes.zid = ($1) GROUP BY selected.theme_id, members.group_id;",
+          [
+            conversationNumericId,
+            themeIds,
+            statementIds,
+            groupIds,
+            groupParticipantIds,
+          ]
+        )
+      : Promise.resolve([]);
+  const [themeRows, groupRows] = await Promise.all([
+    themeCountQuery,
+    groupCountQuery,
+  ]);
+
+  for (const row of themeRows || []) {
+    counts.byTheme.set(row.theme_id, toNumber(row.respondent_count));
+  }
+  for (const row of groupRows || []) {
+    const groupCounts =
+      counts.byThemeAndGroup.get(row.theme_id) || new Map<string, number>();
+    groupCounts.set(String(row.group_id), toNumber(row.respondent_count));
+    counts.byThemeAndGroup.set(row.theme_id, groupCounts);
+  }
+  return counts;
+}
+
+function participantCoverage(count: number, participantCount: number): number {
+  return ratio(count, participantCount);
+}
+
+function themeResponseSummary(
+  stats: VoteStats,
+  respondentCount: number,
+  audienceParticipantCount: number
+) {
+  return {
+    ...stats,
+    respondentCount,
+    respondentCoverage: participantCoverage(
+      respondentCount,
+      audienceParticipantCount
+    ),
+    averageStatementsVotedPerRespondent:
+      respondentCount > 0 ? ratio(stats.voteCount, respondentCount) : 0,
+  };
+}
+
+function getPcaGroupMemberSets(
+  data: Record<string, any> | undefined
+): Map<string, Set<number>> {
+  const membersByGroup = new Map<string, Set<number>>();
+  for (const group of getPcaGroupClusters(data)) {
+    membersByGroup.set(
+      String(group.id),
+      new Set(getGroupParticipantIds(data, group.members))
+    );
+  }
+  return membersByGroup;
+}
+
+function buildExternalThemeInsight(
+  topic: DelphiTopic,
+  assignments: ThemeStatementAssignment[],
+  respondentCount: number,
+  groupRespondentCounts: Map<string, number>,
+  audienceParticipantCount: number,
+  groupMemberSets: Map<string, Set<number>>,
+  options: {
+    includeGroupStats: boolean;
+    includeStatements: boolean;
+    highlightLimit: number;
+    granularity: "fine" | "intermediate" | "coarse" | "only";
+  }
+) {
+  const response = themeResponseSummary(
+    aggregateThemeVoteStats(assignments),
+    respondentCount,
+    audienceParticipantCount
+  );
+  const groupStats: Record<
+    string,
+    ReturnType<typeof themeResponseSummary>
+  > = {};
+
+  if (options.includeGroupStats) {
+    for (const [groupId, memberIds] of groupMemberSets.entries()) {
+      groupStats[groupId] = themeResponseSummary(
+        aggregateThemeVoteStats(assignments, groupId),
+        groupRespondentCounts.get(groupId) || 0,
+        memberIds.size
+      );
+    }
+  }
+
+  const respondedAssignments = assignments.filter(
+    ({ statement }) => statement.voteCount > 0
+  );
+  const topAgreeStatements = takeThemeStatements(
+    respondedAssignments,
+    options.highlightLimit,
+    (left, right) =>
+      right.statement.agreement - left.statement.agreement ||
+      right.statement.voteCount - left.statement.voteCount
+  );
+  const topDisagreeStatements = takeThemeStatements(
+    respondedAssignments,
+    options.highlightLimit,
+    (left, right) =>
+      right.statement.disagreement - left.statement.disagreement ||
+      right.statement.voteCount - left.statement.voteCount
+  );
+  const mostDivisiveStatements = takeThemeStatements(
+    respondedAssignments,
+    options.highlightLimit,
+    (left, right) =>
+      right.statement.divisivenessScore - left.statement.divisivenessScore ||
+      right.statement.voteCount - left.statement.voteCount
+  );
+
+  return {
+    themeId: topic.topicKey,
+    name: topic.topicName,
+    jobId: topic.jobId,
+    layerId: topic.layerId,
+    clusterId: topic.clusterId,
+    granularity: options.granularity,
+    modelName: topic.modelName,
+    generatedAt: topic.createdAt,
+    statementCount: assignments.length,
+    respondedStatementCount: respondedAssignments.length,
+    statementIds: assignments.map(({ statement }) => statement.statementId),
+    response,
+    metrics: {
+      meanStatementConsensus: weightedThemeMean(
+        assignments,
+        (statement) => statement.consensusScore
+      ),
+      meanStatementDivisiveness: weightedThemeMean(
+        assignments,
+        (statement) => statement.divisivenessScore
+      ),
+      meanStatementUncertainty: weightedThemeMean(
+        assignments,
+        (statement) => statement.uncertaintyScore
+      ),
+      meanGroupAwareConsensus: weightedThemeMean(
+        assignments,
+        (statement) => statement.groupAwareConsensus
+      ),
+      meanAssignmentConfidence: meanAssignmentMetric(
+        assignments,
+        (assignment) => assignment.confidence
+      ),
+      meanDistanceToCentroid: meanAssignmentMetric(
+        assignments,
+        (assignment) => assignment.distanceToCentroid
+      ),
+    },
+    ...(options.includeGroupStats ? { groupStats } : {}),
+    representativeStatements: representativeThemeStatements(
+      assignments,
+      options.highlightLimit
+    ),
+    highlights: {
+      topAgreeStatements,
+      topDisagreeStatements,
+      mostDivisiveStatements,
+    },
+    ...(options.includeStatements
+      ? {
+          statements: assignments.map((assignment) =>
+            detailedThemeStatement(assignment, options.includeGroupStats)
+          ),
+        }
+      : {}),
+  };
+}
+
 function sortAndLimitStatements(
   statements: ExternalStatementInsight[],
   options: { sort: string; limit: number; minVotes: number }
@@ -1226,6 +1734,214 @@ export async function handle_GET_external_insights_groups(
   }
 }
 
+export async function handle_GET_external_insights_themes(
+  req: ExternalRequest,
+  res: Response
+) {
+  try {
+    const conversationId = getPathConversationId(req);
+    const conversation = await resolveOwnedExternalConversation(
+      req,
+      conversationId
+    );
+    const query = req.query || {};
+    const includeGroupStats = readOptionalBool(
+      query,
+      "includeGroupStats",
+      true,
+      ["include_group_stats"]
+    );
+    const includeStatements = readOptionalBool(
+      query,
+      "includeStatements",
+      false,
+      ["include_statements"]
+    );
+    const includeInactive = readOptionalBool(query, "includeInactive", false, [
+      "include_inactive",
+    ]);
+    const highlightLimit = readOptionalIntInRange(
+      query,
+      "highlightLimit",
+      5,
+      1,
+      20
+    );
+
+    const [pca, topicRunsResult, clusterAssignments] = await Promise.all([
+      getPca(conversation.conversationNumericId),
+      loadDelphiTopicRuns(conversation.conversationNumericId),
+      getClusterAssignments(conversation.conversationNumericId),
+    ]);
+    const [status, statements] = await Promise.all([
+      loadExternalInsightStatus(conversation, pca),
+      buildExternalStatementInsights(conversation, pca),
+    ]);
+    const selectedRun = topicRunsResult.runs[0] || null;
+    const availableLayerIds = selectedRun
+      ? getDelphiRunLayerIds(selectedRun)
+      : [];
+    const layerSelection = readThemeLayerSelection(query, availableLayerIds);
+    const selectedTopics = selectedRun
+      ? selectedRun.topics.filter((topic) =>
+          layerSelection.layerIds.includes(topic.layerId)
+        )
+      : [];
+    const statementsById = new Map(
+      statements.map((statement) => [statement.statementId, statement])
+    );
+    const assignmentsByTheme = new Map<string, ThemeStatementAssignment[]>();
+
+    for (const topic of selectedTopics) {
+      const assignments = getThemeStatementAssignments(
+        topic,
+        clusterAssignments,
+        statementsById,
+        includeInactive
+      );
+      assignmentsByTheme.set(topic.topicKey, assignments);
+    }
+
+    const assignedStatementIds = new Set<number>();
+    for (const assignments of assignmentsByTheme.values()) {
+      for (const { statement } of assignments) {
+        assignedStatementIds.add(statement.statementId);
+      }
+    }
+    const eligibleStatementCount = statements.filter(
+      (statement) => includeInactive || statement.active
+    ).length;
+
+    const pcaData = getPcaData(pca);
+    const groupMemberSets = includeGroupStats
+      ? getPcaGroupMemberSets(pcaData)
+      : new Map<string, Set<number>>();
+    const respondentCounts = await loadThemeRespondentCounts(
+      conversation.conversationNumericId,
+      assignmentsByTheme,
+      groupMemberSets
+    );
+    const themes = selectedTopics
+      .map((topic) =>
+        buildExternalThemeInsight(
+          topic,
+          assignmentsByTheme.get(topic.topicKey) || [],
+          respondentCounts.byTheme.get(topic.topicKey) || 0,
+          respondentCounts.byThemeAndGroup.get(topic.topicKey) ||
+            new Map<string, number>(),
+          status.participantCount,
+          groupMemberSets,
+          {
+            includeGroupStats,
+            includeStatements,
+            highlightLimit,
+            granularity: themeLayerGranularity(
+              topic.layerId,
+              availableLayerIds
+            ),
+          }
+        )
+      )
+      .sort(
+        (left, right) =>
+          right.layerId - left.layerId ||
+          right.response.voteCount - left.response.voteCount ||
+          left.name.localeCompare(right.name)
+      );
+    const analysisGeneratedAt = selectedRun?.createdAt
+      ? Date.parse(selectedRun.createdAt)
+      : Number.NaN;
+    const themeAnalysisStale = selectedRun
+      ? Number.isFinite(analysisGeneratedAt) &&
+        status.lastStatementTimestamp !== null
+        ? analysisGeneratedAt < status.lastStatementTimestamp
+        : null
+      : null;
+    const warnings: string[] = [];
+
+    if (!topicRunsResult.available) {
+      warnings.push("delphi_topic_store_unavailable");
+    } else if (!selectedRun) {
+      warnings.push("theme_analysis_not_run");
+    } else if (clusterAssignments.size === 0) {
+      warnings.push("theme_assignments_unavailable");
+    } else if (!themes.some((theme) => theme.statementCount > 0)) {
+      warnings.push("selected_themes_have_no_statement_assignments");
+    }
+    if (themeAnalysisStale) {
+      warnings.push("theme_analysis_stale");
+    }
+    if (!status.mathReady) {
+      warnings.push("math_not_ready");
+    }
+
+    res.status(200).json({
+      ...status,
+      themeAnalysisReady: !!selectedRun,
+      themeAnalysisStale,
+      themeStatsReady: themes.some((theme) => theme.statementCount > 0),
+      readiness: {
+        themes: !!selectedRun,
+        assignments:
+          clusterAssignments.size > 0 &&
+          themes.some((theme) => theme.statementCount > 0),
+        math: status.mathReady,
+      },
+      analysis: selectedRun
+        ? {
+            jobId: selectedRun.jobId,
+            generatedAt: selectedRun.createdAt,
+            modelNames: selectedRun.modelNames,
+            isLatest: true,
+            isStale: themeAnalysisStale,
+          }
+        : null,
+      availableRuns: topicRunsResult.runs.map((run, index) => ({
+        jobId: run.jobId,
+        generatedAt: run.createdAt,
+        modelNames: run.modelNames,
+        themeCount: run.topics.length,
+        layerIds: getDelphiRunLayerIds(run),
+        isLatest: index === 0,
+      })),
+      availableLayers: availableLayerIds.map((layerId) => ({
+        layerId,
+        granularity: themeLayerGranularity(layerId, availableLayerIds),
+        themeCount:
+          selectedRun?.topics.filter((topic) => topic.layerId === layerId)
+            .length || 0,
+        selected: layerSelection.layerIds.includes(layerId),
+      })),
+      filters: {
+        layer: layerSelection.requested,
+        selectedLayerIds: layerSelection.layerIds,
+        includeGroupStats,
+        includeStatements,
+        includeInactive,
+        highlightLimit,
+      },
+      coverage: {
+        eligibleStatementCount,
+        assignedStatementCount: assignedStatementIds.size,
+        unassignedStatementCount: Math.max(
+          0,
+          eligibleStatementCount - assignedStatementIds.size
+        ),
+        assignmentCoverage: ratio(
+          assignedStatementIds.size,
+          eligibleStatementCount
+        ),
+      },
+      responseSemantics:
+        "Vote aggregates describe responses to statements assigned to a theme; they do not measure support for the theme label itself.",
+      warnings,
+      themes,
+    });
+  } catch (err) {
+    sendExternalError(res, err, "polis_err_external_insights_themes");
+  }
+}
+
 export async function handle_GET_external_insights_overview(
   req: ExternalRequest,
   res: Response
@@ -1391,7 +2107,7 @@ export async function handle_POST_external_conversations(
       .returning("*")
       .toString();
 
-    const rows = await pg.queryP(q, []);
+    const rows = (await pg.queryP(q, [])) as Array<{ zid: number }>;
     const conversationNumericId = rows?.[0]?.zid;
     if (!conversationNumericId) {
       throw new ExternalApiError(500, "polis_err_add_conversation");

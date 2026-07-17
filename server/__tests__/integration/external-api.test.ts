@@ -1,14 +1,19 @@
-import { beforeAll, describe, expect, test } from "@jest/globals";
+import { afterAll, beforeAll, describe, expect, test } from "@jest/globals";
 import type { Agent } from "supertest";
 
 import { newAgent } from "../setup/api-test-helpers";
 import { pool } from "../setup/db-test-helpers";
+import {
+  cleanupDelphiTopicData,
+  createDelphiTopicCluster,
+} from "../setup/dynamodb-test-helpers";
 
 const EXTERNAL_API_KEY = "test-external-api-key";
 
 describe("External Management API", () => {
   let agent: Agent;
   let ownerUserId: number;
+  const delphiConversationIds: number[] = [];
 
   beforeAll(async () => {
     process.env.EXTERNAL_API_KEY = EXTERNAL_API_KEY;
@@ -21,6 +26,12 @@ describe("External Management API", () => {
     process.env.EXTERNAL_API_OWNER_USER_ID = String(ownerUserId);
 
     agent = await newAgent();
+  });
+
+  afterAll(async () => {
+    for (const zid of delphiConversationIds) {
+      await cleanupDelphiTopicData(zid);
+    }
   });
 
   function externalPost(path: string) {
@@ -312,6 +323,178 @@ describe("External Management API", () => {
     expect(response.body.conversationId).toBe(conversationId);
     expect(response.body.mathReady).toBe(false);
     expect(response.body.groups).toEqual([]);
+  });
+
+  test("returns a dashboard-ready empty theme response before Delphi has run", async () => {
+    const conversationId = await createExternalConversation();
+
+    const response = await externalGet(
+      `/api/v3/external/conversations/${conversationId}/insights/themes`
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      conversationId,
+      themeAnalysisReady: false,
+      themeAnalysisStale: null,
+      themeStatsReady: false,
+      readiness: {
+        themes: false,
+        assignments: false,
+        math: false,
+      },
+      analysis: null,
+      availableRuns: [],
+      availableLayers: [],
+      themes: [],
+    });
+    expect(
+      response.body.warnings.some((warning: string) =>
+        ["theme_analysis_not_run", "delphi_topic_store_unavailable"].includes(
+          warning
+        )
+      )
+    ).toBe(true);
+  });
+
+  test("returns themes with response, reach, metrics, and supporting statements", async () => {
+    const conversationId = await createExternalConversation();
+    const firstComment = await createExternalComment(
+      conversationId,
+      `theme-author-a-${Date.now()}`,
+      "Night buses should run every thirty minutes."
+    );
+    const secondComment = await createExternalComment(
+      conversationId,
+      `theme-author-b-${Date.now()}`,
+      "Bus reliability should be published each month."
+    );
+    const agreeVoter = `theme-agree-voter-${Date.now()}`;
+    const mixedVoter = `theme-mixed-voter-${Date.now()}`;
+
+    await externalPost(
+      `/api/v3/external/conversations/${conversationId}/votes`
+    ).send({
+      externalParticipantId: agreeVoter,
+      statementId: firstComment.statementId,
+      vote: -1,
+    });
+    await externalPost(
+      `/api/v3/external/conversations/${conversationId}/votes`
+    ).send({
+      externalParticipantId: agreeVoter,
+      statementId: secondComment.statementId,
+      vote: -1,
+    });
+    await externalPost(
+      `/api/v3/external/conversations/${conversationId}/votes`
+    ).send({
+      externalParticipantId: mixedVoter,
+      statementId: firstComment.statementId,
+      vote: 1,
+    });
+    await externalPost(
+      `/api/v3/external/conversations/${conversationId}/votes`
+    ).send({
+      externalParticipantId: mixedVoter,
+      statementId: secondComment.statementId,
+      vote: 0,
+    });
+
+    const zid = await getConversationNumericId(conversationId);
+    delphiConversationIds.push(zid);
+    const jobId = `external-theme-job-${Date.now()}`;
+    const topicKey = `${jobId}#0#1`;
+    await createDelphiTopicCluster(
+      zid,
+      topicKey,
+      [firstComment.statementId, secondComment.statementId],
+      0,
+      1
+    );
+
+    const response = await externalGet(
+      `/api/v3/external/conversations/${conversationId}/insights/themes` +
+        "?includeStatements=true&includeGroupStats=false"
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.themeAnalysisReady).toBe(true);
+    expect(response.body.themeAnalysisStale).toBe(false);
+    expect(response.body.themeStatsReady).toBe(true);
+    expect(response.body.analysis).toMatchObject({
+      jobId,
+      modelNames: ["test-model"],
+      isLatest: true,
+    });
+    expect(response.body.availableLayers).toEqual([
+      {
+        layerId: 0,
+        granularity: "only",
+        themeCount: 1,
+        selected: true,
+      },
+    ]);
+    expect(response.body.coverage).toEqual({
+      eligibleStatementCount: 2,
+      assignedStatementCount: 2,
+      unassignedStatementCount: 0,
+      assignmentCoverage: 1,
+    });
+    expect(response.body.themes).toHaveLength(1);
+
+    const theme = response.body.themes[0];
+    expect(theme).toMatchObject({
+      themeId: topicKey,
+      name: `Test Topic ${topicKey}`,
+      layerId: 0,
+      clusterId: 1,
+      granularity: "only",
+      statementCount: 2,
+      respondedStatementCount: 2,
+      statementIds: [firstComment.statementId, secondComment.statementId],
+      response: {
+        voteCount: 4,
+        agreeCount: 2,
+        disagreeCount: 1,
+        passCount: 1,
+        agreement: 0.5,
+        disagreement: 0.25,
+        pass: 0.25,
+        respondentCount: 2,
+        respondentCoverage: 0.5,
+        averageStatementsVotedPerRespondent: 2,
+      },
+      metrics: {
+        meanStatementConsensus: 0.5,
+        meanStatementDivisiveness: 0.25,
+        meanStatementUncertainty: 0.25,
+        meanGroupAwareConsensus: null,
+        meanAssignmentConfidence: 0.9,
+        meanDistanceToCentroid: 0.5,
+      },
+    });
+    expect(theme).not.toHaveProperty("groupStats");
+    expect(theme.representativeStatements).toHaveLength(2);
+    expect(theme.representativeStatements[0]).toMatchObject({
+      confidence: 0.9,
+      distanceToCentroid: 0.5,
+    });
+    expect(theme.highlights.topAgreeStatements).toHaveLength(2);
+    expect(theme.highlights.topDisagreeStatements).toHaveLength(2);
+    expect(theme.highlights.mostDivisiveStatements).toHaveLength(2);
+    expect(theme.statements).toHaveLength(2);
+    expect(theme.statements[0]).not.toHaveProperty("groupStats");
+  });
+
+  test("validates theme layer selection", async () => {
+    const conversationId = await createExternalConversation();
+    const response = await externalGet(
+      `/api/v3/external/conversations/${conversationId}/insights/themes?layer=sideways`
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.body.error).toBe("polis_err_param_invalid_layer");
   });
 
   test("queues a math refresh task for external insights", async () => {
