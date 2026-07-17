@@ -1,11 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from "@jest/globals";
+import { GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import type { Agent } from "supertest";
 
 import { newAgent } from "../setup/api-test-helpers";
 import { pool } from "../setup/db-test-helpers";
 import {
+  cleanupDelphiJobs,
   cleanupDelphiTopicData,
   createDelphiTopicCluster,
+  docClient,
+  ensureJobQueueTableExists,
 } from "../setup/dynamodb-test-helpers";
 
 const EXTERNAL_API_KEY = "test-external-api-key";
@@ -25,12 +29,14 @@ describe("External Management API", () => {
     ownerUserId = Number(owner.rows[0].uid);
     process.env.EXTERNAL_API_OWNER_USER_ID = String(ownerUserId);
 
+    await ensureJobQueueTableExists();
     agent = await newAgent();
   });
 
   afterAll(async () => {
     for (const zid of delphiConversationIds) {
       await cleanupDelphiTopicData(zid);
+      await cleanupDelphiJobs(String(zid));
     }
   });
 
@@ -91,6 +97,13 @@ describe("External Management API", () => {
       participantId: number;
       statementId: number;
       mathRefreshQueued: boolean;
+      themeRefreshQueued: boolean;
+      themeRefresh: {
+        jobId: string;
+        state: string;
+        notBefore: string | null;
+        rerunRequested: boolean;
+      };
     };
   }
 
@@ -175,6 +188,95 @@ describe("External Management API", () => {
     );
     expect(comment).toMatchObject({ mathRefreshQueued: true });
     expect(await getMathRefreshTaskCount(conversationNumericId)).toBe(1);
+  });
+
+  test("self-manages debounced theme refreshes and coalesces mid-run changes", async () => {
+    const conversationId = await createExternalConversation();
+    const comments = [];
+    for (let index = 0; index < 5; index += 1) {
+      comments.push(
+        await createExternalComment(
+          conversationId,
+          `auto-theme-author-${index}-${Date.now()}`,
+          `Automatic theme statement ${index} ${Date.now()}`
+        )
+      );
+    }
+
+    expect(comments[0].themeRefresh.state).toBe("waiting_for_statements");
+    expect(comments[3].themeRefresh.state).toBe("waiting_for_statements");
+    expect(comments[4].themeRefresh).toMatchObject({
+      state: "scheduled",
+      rerunRequested: false,
+    });
+    expect(comments[4].themeRefreshQueued).toBe(true);
+
+    const zid = await getConversationNumericId(conversationId);
+    delphiConversationIds.push(zid);
+    const jobId = `auto-theme-refresh-${zid}`;
+    const scheduled = await docClient.send(
+      new GetCommand({
+        TableName: "Delphi_JobQueue",
+        Key: { job_id: jobId },
+        ConsistentRead: true,
+      })
+    );
+    expect(scheduled.Item).toMatchObject({
+      job_id: jobId,
+      status: "PENDING",
+      conversation_id: String(zid),
+      auto_managed: true,
+      refresh_kind: "themes",
+    });
+    expect(new Date(scheduled.Item?.not_before).getTime()).toBeGreaterThan(
+      Date.now()
+    );
+    expect(JSON.parse(scheduled.Item?.job_config)).toMatchObject({
+      generate_visualizations: false,
+    });
+
+    await docClient.send(
+      new UpdateCommand({
+        TableName: "Delphi_JobQueue",
+        Key: { job_id: jobId },
+        UpdateExpression:
+          "SET #status = :processing, #version = #version + :one, started_at = :now REMOVE not_before, dirty_since",
+        ExpressionAttributeNames: {
+          "#status": "status",
+          "#version": "version",
+        },
+        ExpressionAttributeValues: {
+          ":processing": "PROCESSING",
+          ":one": 1,
+          ":now": new Date().toISOString(),
+        },
+      })
+    );
+
+    const duringRun = await createExternalComment(
+      conversationId,
+      `auto-theme-mid-run-${Date.now()}`,
+      `Statement arriving during analysis ${Date.now()}`
+    );
+    expect(duringRun.themeRefresh).toMatchObject({
+      state: "processing",
+      rerunRequested: true,
+    });
+
+    const processing = await docClient.send(
+      new GetCommand({
+        TableName: "Delphi_JobQueue",
+        Key: { job_id: jobId },
+        ConsistentRead: true,
+      })
+    );
+    expect(processing.Item).toMatchObject({
+      status: "PROCESSING",
+      rerun_requested: true,
+    });
+    expect(
+      new Date(processing.Item?.next_not_before).getTime()
+    ).toBeGreaterThan(Date.now());
   });
 
   test("records and changes latest votes by external participant ID", async () => {
@@ -338,6 +440,10 @@ describe("External Management API", () => {
       themeAnalysisReady: false,
       themeAnalysisStale: null,
       themeStatsReady: false,
+      analysisLifecycle: {
+        state: "waiting_for_statements",
+        minimumStatementCount: 5,
+      },
       readiness: {
         themes: false,
         assignments: false,

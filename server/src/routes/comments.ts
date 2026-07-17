@@ -35,6 +35,7 @@ import {
   updateVoteCount,
 } from "../server-helpers";
 import { parsePagination, createPaginationMeta } from "../utils/pagination";
+import { scheduleAutomaticDelphiAnalysisBestEffort } from "../utils/delphiJobs";
 
 /* this is a concept and can be generalized to other handlers */
 interface PolisRequestParams {
@@ -552,6 +553,10 @@ async function handle_POST_comments(req: RequestWithP, res: any) {
     const response: any = {
       tid,
       currentPid: pid,
+      themeRefresh: await scheduleAutomaticDelphiAnalysisBestEffort(zid, {
+        reason: "comment_created",
+        touchExisting: true,
+      }),
     };
 
     // 11. Auth token will be automatically included by attachAuthToken middleware
@@ -669,9 +674,14 @@ function handle_PUT_comments(
       logger.debug(`isModerator result: ${isModerator}`);
       if (isModerator) {
         moderateCommentQuery(zid, tid, active, mod, is_meta).then(
-          function () {
+          async function () {
             logger.debug("Comment moderated successfully");
-            res.status(200).json({});
+            const themeRefresh =
+              await scheduleAutomaticDelphiAnalysisBestEffort(zid, {
+                reason: "comment_moderation_changed",
+                touchExisting: true,
+              });
+            res.status(200).json({ themeRefresh });
           },
           function (err: any) {
             logger.error("Error in moderateCommentQuery:", err);
@@ -968,9 +978,20 @@ async function handle_POST_comments_bulk(
       }
     }, 100);
 
+    const insertedCount = results.filter(
+      (result) => result.status === "success"
+    ).length;
+    const themeRefresh = insertedCount
+      ? await scheduleAutomaticDelphiAnalysisBestEffort(zid!, {
+          reason: "bulk_comments_created",
+          touchExisting: true,
+        })
+      : undefined;
+
     res.json({
       results,
       currentPid: pid,
+      ...(themeRefresh ? { themeRefresh } : {}),
     });
   } catch (err: any) {
     failJson(res, 500, "polis_err_post_comments_bulk", err);

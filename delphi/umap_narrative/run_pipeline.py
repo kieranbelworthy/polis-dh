@@ -677,6 +677,7 @@ def process_layers_and_store_characteristics(
         output_dir: Optional directory to save visualization data as JSON
         dynamo_storage: Optional DynamoDBStorage object for storing in DynamoDB
         job_id: Job ID for this run
+        generate_visualizations: Whether to render HTML/datamap outputs
 
     Returns:
         Dictionary with layer data including characteristics and enhanced topic names
@@ -1052,6 +1053,7 @@ def process_layers_and_create_visualizations(
     use_ollama=False,
     dynamo_storage=None,
     job_id=None,  # Added job_id
+    generate_visualizations=True,
 ):
     """
     Process layers, store data, and create visualizations.
@@ -1077,16 +1079,21 @@ def process_layers_and_create_visualizations(
         job_id=job_id,  # Pass job_id
     )
 
-    # Create visualizations with basic numeric labels
-    index_file = create_visualizations(
-        conversation_id,
-        conversation_name,
-        document_map,
-        cluster_layers,
-        comment_texts,
-        output_dir,
-        layer_data=layer_data,
-    )
+    # Data-only jobs still generate characteristics and LLM topic names, but
+    # avoid the expensive HTML/datamap rendering that no API consumer reads.
+    index_file = None
+    if generate_visualizations:
+        index_file = create_visualizations(
+            conversation_id,
+            conversation_name,
+            document_map,
+            cluster_layers,
+            comment_texts,
+            output_dir,
+            layer_data=layer_data,
+        )
+    else:
+        logger.info("Skipping interactive visualizations for this data-only run.")
 
     # If Ollama is requested, warn that this is deprecated
     if use_ollama:
@@ -1324,7 +1331,8 @@ def create_enhanced_multilayer_index(
 
 
 def process_conversation(
-    zid, export_dynamo=True, use_ollama=False, include_moderation=False, exclude_comment_selections=True
+    zid, export_dynamo=True, use_ollama=False, include_moderation=False,
+    exclude_comment_selections=True, generate_visualizations=True
 ):
     """
     Main function to process a conversation and generate visualizations.
@@ -1336,6 +1344,7 @@ def process_conversation(
         include_moderation: Whether to filter out moderated comments (mod == -1)
         exclude_comment_selections: Whether to exclude comments that have selection == -1
             in report_comment_selections table (for any report in this conversation)
+        generate_visualizations: Whether to render HTML/datamap outputs
     """
     # Create conversation directory
     output_dir = os.path.join(
@@ -1465,6 +1474,7 @@ def process_conversation(
         use_ollama=use_ollama,
         dynamo_storage=dynamo_storage,
         job_id=job_id,  # Pass job_id
+        generate_visualizations=generate_visualizations,
     )
 
     # Save metadata
@@ -1510,6 +1520,11 @@ def main():
     )
     parser.add_argument(
         "--use-ollama", action="store_true", help="Use Ollama for topic naming"
+    )
+    parser.add_argument(
+        "--skip-visualizations",
+        action="store_true",
+        help="Generate theme data without HTML or datamap plots",
     )
     parser.add_argument(
         "--include_moderation",
@@ -1587,6 +1602,7 @@ def main():
             comment_texts,
             output_dir,
             use_ollama=args.use_ollama,
+            generate_visualizations=not args.skip_visualizations,
         )
     else:
         # Process with real data from PostgreSQL
@@ -1596,6 +1612,7 @@ def main():
             use_ollama=args.use_ollama,
             include_moderation=args.include_moderation,
             exclude_comment_selections=args.exclude_comment_selections,
+            generate_visualizations=not args.skip_visualizations,
         )
 
 

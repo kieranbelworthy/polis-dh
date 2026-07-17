@@ -24,6 +24,10 @@ import {
   type DelphiTopic,
   type DelphiTopicRun,
 } from "../utils/delphiTopics";
+import {
+  getAutomaticDelphiAnalysisStateBestEffort,
+  scheduleAutomaticDelphiAnalysisBestEffort,
+} from "../utils/delphiJobs";
 import { getPca } from "../utils/pca";
 import type { PcaCacheItem } from "../utils/pca";
 import logger from "../utils/logger";
@@ -1857,6 +1861,26 @@ export async function handle_GET_external_insights_themes(
         ? analysisGeneratedAt < status.lastStatementTimestamp
         : null
       : null;
+    const shouldRepairThemeAnalysis =
+      topicRunsResult.available &&
+      (!selectedRun || !selectedRun.createdAt || themeAnalysisStale === true);
+    const analysisLifecycle = shouldRepairThemeAnalysis
+      ? await scheduleAutomaticDelphiAnalysisBestEffort(
+          conversation.conversationNumericId,
+          {
+            reason: selectedRun
+              ? selectedRun.createdAt
+                ? "stale_theme_analysis_read_repair"
+                : "unknown_freshness_theme_analysis_read_repair"
+              : "missing_theme_analysis_read_repair",
+            statementCount: status.statementCount,
+            touchExisting: false,
+          }
+        )
+      : await getAutomaticDelphiAnalysisStateBestEffort(
+          conversation.conversationNumericId,
+          status.statementCount
+        );
     const warnings: string[] = [];
 
     if (!topicRunsResult.available) {
@@ -1871,6 +1895,13 @@ export async function handle_GET_external_insights_themes(
     if (themeAnalysisStale) {
       warnings.push("theme_analysis_stale");
     }
+    if (["scheduled", "processing"].includes(analysisLifecycle.state)) {
+      warnings.push("theme_analysis_updating");
+    } else if (analysisLifecycle.state === "waiting_for_statements") {
+      warnings.push("theme_analysis_waiting_for_statements");
+    } else if (analysisLifecycle.state === "unavailable") {
+      warnings.push("theme_refresh_unavailable");
+    }
     if (!status.mathReady) {
       warnings.push("math_not_ready");
     }
@@ -1880,6 +1911,7 @@ export async function handle_GET_external_insights_themes(
       themeAnalysisReady: !!selectedRun,
       themeAnalysisStale,
       themeStatsReady: themes.some((theme) => theme.statementCount > 0),
+      analysisLifecycle,
       readiness: {
         themes: !!selectedRun,
         assignments:
@@ -2196,6 +2228,10 @@ export async function handle_POST_external_comments(
       participantId,
       statementId: capture.body?.tid,
       mathRefreshQueued,
+      themeRefresh: capture.body?.themeRefresh,
+      themeRefreshQueued: ["scheduled", "processing"].includes(
+        capture.body?.themeRefresh?.state
+      ),
     });
   } catch (err) {
     sendExternalError(res, err, "polis_err_external_comment");

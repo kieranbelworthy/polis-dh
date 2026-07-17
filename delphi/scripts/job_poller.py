@@ -43,6 +43,38 @@ from botocore.exceptions import ClientError
 import urllib
 
 
+def _parse_iso_datetime(value):
+    """Parse DynamoDB ISO timestamps while accepting both Z and +00:00."""
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+
+def _job_is_due(job, now):
+    not_before = _parse_iso_datetime(job.get('not_before'))
+    return not_before is None or not_before <= now
+
+
+def _job_priority(job):
+    try:
+        return int(job.get('priority', 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _queue_iso_datetime(value):
+    """Match the millisecond/Z timestamp format used by the Node scheduler."""
+    return value.astimezone(timezone.utc).isoformat(
+        timespec='milliseconds'
+    ).replace('+00:00', 'Z')
+
+
 class PostgresConfig:
     """Configuration for PostgreSQL connection."""
     
@@ -436,7 +468,7 @@ class JobProcessor:
         """
         try:
             # Helper to query the index with pagination
-            def execute_paginated_query(status):
+            def execute_paginated_query(status, due_before=None):
                 items = []
                 last_key = None
                 while True:
@@ -447,6 +479,9 @@ class JobProcessor:
                         'ExpressionAttributeValues': {':status': status},
                         'ScanIndexForward': True
                     }
+                    if due_before:
+                        query_kwargs['KeyConditionExpression'] += ' AND created_at <= :due_before'
+                        query_kwargs['ExpressionAttributeValues'][':due_before'] = due_before
                     if last_key:
                         query_kwargs['ExclusiveStartKey'] = last_key
                     
@@ -458,14 +493,22 @@ class JobProcessor:
                 return items
 
             # 1. Fetch all potentially actionable jobs from different states
-            pending_jobs = execute_paginated_query('PENDING')
-            awaiting_jobs = execute_paginated_query('AWAITING_RECHECK')
+            now = datetime.now(timezone.utc)
+            due_before = _queue_iso_datetime(now)
+            pending_jobs = [
+                job for job in execute_paginated_query('PENDING', due_before)
+                if _job_is_due(job, now)
+            ]
+            awaiting_jobs = [
+                job for job in execute_paginated_query('AWAITING_RECHECK', due_before)
+                if _job_is_due(job, now)
+            ]
             
             actionable_jobs = pending_jobs + awaiting_jobs
 
             # 2. Add any jobs that are stuck in PROCESSING with an expired lock (zombies)
             processing_jobs = execute_paginated_query('PROCESSING')
-            now_iso = datetime.now(timezone.utc).isoformat()
+            now_iso = now.isoformat()
             for job in processing_jobs:
                 if job.get('lock_expires_at', 'z') < now_iso:
                     logger.warning(f"Found zombie job {job['job_id']} with expired lock. Re-queueing.")
@@ -477,6 +520,7 @@ class JobProcessor:
             # 3. Sort all actionable jobs by priority and then by creation date
             actionable_jobs.sort(key=lambda x: (
                 0 if x.get('status') == 'PENDING' else 1, # PENDING jobs are highest priority
+                -_job_priority(x),
                 x.get('created_at', '')
             ))
             
@@ -501,27 +545,33 @@ class JobProcessor:
         # This condition handles all actionable states found by find_pending_job.
         # It allows claiming a PENDING job, an AWAITING_RECHECK job, or an expired job.
         condition_expr = "(#s = :pending OR #s = :awaiting_recheck OR (attribute_exists(lock_expires_at) AND lock_expires_at < :now)) AND #v = :current_version"
+        expression_values = {
+            ':pending': 'PENDING',
+            ':awaiting_recheck': 'AWAITING_RECHECK',
+            ':now': now.isoformat(),
+            ':processing': 'PROCESSING',
+            ':expiry': new_expiry_iso,
+            ':current_version': current_version,
+            ':new_version': current_version + 1,
+            ':worker_id': self.worker_id
+        }
+        if current_status == 'PENDING' and job.get('not_before'):
+            # A comment can extend the debounce after the poll but before this
+            # claim. Requiring the observed value closes that race.
+            condition_expr += " AND not_before = :observed_not_before"
+            expression_values[':observed_not_before'] = job['not_before']
 
         try:
             response = self.table.update_item(
                 Key={'job_id': job_id},
-                UpdateExpression='SET #s = :processing, started_at = :now, lock_expires_at = :expiry, #v = :new_version, #w = :worker_id',
+                UpdateExpression='SET #s = :processing, started_at = :now, lock_expires_at = :expiry, #v = :new_version, #w = :worker_id REMOVE not_before, dirty_since',
                 ConditionExpression=condition_expr,
                 ExpressionAttributeNames={
                     '#s': 'status',
                     '#v': 'version',
                     '#w': 'worker_id'
                 },
-                ExpressionAttributeValues={
-                    ':pending': 'PENDING',
-                    ':awaiting_recheck': 'AWAITING_RECHECK',
-                    ':now': now.isoformat(),
-                    ':processing': 'PROCESSING',
-                    ':expiry': new_expiry_iso,
-                    ':current_version': current_version,
-                    ':new_version': current_version + 1,
-                    ':worker_id': self.worker_id
-                },
+                ExpressionAttributeValues=expression_values,
                 ReturnValues='ALL_NEW'
             )
             logger.info(f"Successfully claimed job {job_id}. Lock expires at {new_expiry_iso}.")
@@ -633,8 +683,38 @@ class JobProcessor:
             # Log failure but do not crash the worker
             logger.error(f"Error updating job logs for {job['job_id']}: {e}")
 
+    def heartbeat_job_lock(self, job_id, stop_event, interval_seconds=300):
+        """Keep a long-running Delphi process from being reclaimed as a zombie."""
+        while not stop_event.wait(interval_seconds):
+            now = datetime.now(timezone.utc)
+            expiry = (now + timedelta(minutes=15)).isoformat()
+            try:
+                self.table.update_item(
+                    Key={'job_id': job_id},
+                    UpdateExpression='SET lock_expires_at = :expiry, updated_at = :now',
+                    ConditionExpression='#status = :processing AND worker_id = :worker_id',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':processing': 'PROCESSING',
+                        ':worker_id': self.worker_id,
+                        ':expiry': expiry,
+                        ':now': now.isoformat()
+                    }
+                )
+            except ClientError as exc:
+                if exc.response['Error']['Code'] != 'ConditionalCheckFailedException':
+                    logger.error(f"Failed to renew lock for job {job_id}: {exc}")
+                return
+            except Exception as exc:
+                logger.error(f"Unexpected lock heartbeat error for job {job_id}: {exc}")
+                return
+
     def complete_job(self, job, success, result=None, error=None):
         """Mark a job as completed or failed using optimistic locking."""
+        if job.get('auto_managed'):
+            self.complete_auto_managed_job(job, success, result=result, error=error)
+            return
+
         job_id = job['job_id']
         current_version = job.get('version', 1)
         new_status = 'COMPLETED' if success else 'FAILED'
@@ -686,6 +766,139 @@ class JobProcessor:
         except Exception as e:
             logger.error(f"Error completing job {job_id}: {e}")
 
+    def complete_auto_managed_job(self, job, success, result=None, error=None):
+        """
+        Complete the current automatic run, or atomically turn it back into
+        the one pending successor when data changed while it was processing.
+        """
+        job_id = job['job_id']
+        new_status = 'COMPLETED' if success else 'FAILED'
+
+        for _attempt in range(4):
+            now = datetime.now(timezone.utc)
+            now_iso = now.isoformat()
+            job_results = {
+                'result_type': 'SUCCESS' if success else 'FAILURE',
+                'completed_at': now_iso
+            }
+            if result:
+                job_results.update(result)
+            if error:
+                job_results['error'] = str(error)
+
+            try:
+                current = self.table.get_item(
+                    Key={'job_id': job_id},
+                    ConsistentRead=True
+                ).get('Item')
+                if not current or current.get('status') != 'PROCESSING':
+                    logger.warning(
+                        f"Automatic job {job_id} is no longer PROCESSING; completion skipped"
+                    )
+                    return
+
+                current_version = current.get('version', 1)
+                if current.get('rerun_requested') is True:
+                    observed_next = current.get('next_not_before')
+                    requested_at = _parse_iso_datetime(observed_next) or now
+                    try:
+                        min_interval_ms = max(0, int(current.get('min_interval_ms', 0)))
+                    except (TypeError, ValueError):
+                        min_interval_ms = 0
+                    not_before = max(
+                        requested_at,
+                        now + timedelta(milliseconds=min_interval_ms)
+                    )
+                    not_before = _queue_iso_datetime(not_before)
+
+                    self.table.update_item(
+                        Key={'job_id': job_id},
+                        UpdateExpression='''
+                            SET #status = :pending,
+                                created_at = :not_before,
+                                updated_at = :now,
+                                completed_at = :now,
+                                job_results = :job_results,
+                                version = :new_version,
+                                worker_id = :no_worker,
+                                rerun_requested = :no,
+                                not_before = :not_before
+                            REMOVE lock_expires_at, next_not_before, started_at
+                        ''',
+                        ConditionExpression=(
+                            '#status = :processing AND version = :current_version '
+                            'AND rerun_requested = :yes AND next_not_before = :observed_next'
+                        ),
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={
+                            ':pending': 'PENDING',
+                            ':processing': 'PROCESSING',
+                            ':current_version': current_version,
+                            ':new_version': current_version + 1,
+                            ':now': now_iso,
+                            ':job_results': json.dumps(job_results),
+                            ':no_worker': 'none',
+                            ':no': False,
+                            ':yes': True,
+                            ':not_before': not_before,
+                            ':observed_next': observed_next
+                        }
+                    )
+                    logger.info(
+                        f"Automatic job {job_id} completed as {new_status}; "
+                        f"a coalesced successor is scheduled for {not_before}"
+                    )
+                    return
+
+                remove_fields = 'REMOVE lock_expires_at, next_not_before, started_at'
+                if success:
+                    remove_fields += ', dirty_at, dirty_since'
+                self.table.update_item(
+                    Key={'job_id': job_id},
+                    UpdateExpression=f'''
+                        SET #status = :new_status,
+                            updated_at = :now,
+                            completed_at = :now,
+                            job_results = :job_results,
+                            version = :new_version,
+                            rerun_requested = :no
+                        {remove_fields}
+                    ''',
+                    ConditionExpression=(
+                        '#status = :processing AND version = :current_version '
+                        'AND (attribute_not_exists(rerun_requested) OR rerun_requested = :no)'
+                    ),
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':new_status': new_status,
+                        ':processing': 'PROCESSING',
+                        ':current_version': current_version,
+                        ':new_version': current_version + 1,
+                        ':now': now_iso,
+                        ':job_results': json.dumps(job_results),
+                        ':no': False
+                    }
+                )
+                logger.info(f"Automatic job {job_id} marked as {new_status}")
+                return
+            except ClientError as exc:
+                if exc.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                    # A scheduler update raced completion. Re-read and decide
+                    # again so no dirty signal can be lost.
+                    continue
+                logger.error(f"DynamoDB error completing automatic job {job_id}: {exc}")
+                return
+            except Exception as exc:
+                logger.error(
+                    f"Unexpected error completing automatic job {job_id}: {exc}",
+                    exc_info=True
+                )
+                return
+
+        logger.error(
+            f"Automatic job {job_id} could not be completed after concurrent updates"
+        )
+
     def process_job(self, job: Dict[str, Any]) -> None:
         """Processes a claimed job by executing the correct script with real-time log handling."""
         job_id = job['job_id']
@@ -694,6 +907,8 @@ class JobProcessor:
         timeout_seconds = int(job.get('timeout_seconds', 3600))
 
         self.update_job_logs(job, {'level': 'INFO', 'message': f'Worker {self.worker_id} starting job {job_id}'})
+        heartbeat_stop = None
+        heartbeat_thread = None
         
         try:
             # 1. Build the command
@@ -713,6 +928,8 @@ class JobProcessor:
             else: # FULL_PIPELINE
                 # Base command
                 cmd = ['python', f'{app_path}/run_delphi.py', f'--zid={conversation_id}', f'--include_moderation={include_moderation}', f'--exclude_comment_selections={exclude_comment_selections}',]
+                if job_config.get('generate_visualizations') is False:
+                    cmd.append('--skip-visualizations')
                 # Check for report_id and append if it exists
                 report_id = job.get('report_id')
                 if report_id:
@@ -728,6 +945,13 @@ class JobProcessor:
             env['DELPHI_REPORT_ID'] = str(job.get('report_id', conversation_id))
             
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1, universal_newlines=True, env=env)
+            heartbeat_stop = threading.Event()
+            heartbeat_thread = threading.Thread(
+                target=self.heartbeat_job_lock,
+                args=(job_id, heartbeat_stop),
+                daemon=True
+            )
+            heartbeat_thread.start()
 
             start_time = time.time()
             for line in iter(process.stdout.readline, ''):
@@ -763,6 +987,11 @@ class JobProcessor:
         except Exception as e:
             logger.error(f"Critical error processing job {job_id}: {e}", exc_info=True)
             self.complete_job(job, False, error=f"Critical poller error: {str(e)}")
+        finally:
+            if heartbeat_stop:
+                heartbeat_stop.set()
+            if heartbeat_thread:
+                heartbeat_thread.join(timeout=1)
 
 
 def poll_and_process(processor: JobProcessor, interval: int = 10):

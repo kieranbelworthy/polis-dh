@@ -97,6 +97,25 @@ export default {
   databaseSSL: isTrue(process.env.DATABASE_SSL),
   databaseURL: process.env.DATABASE_URL as string,
   ddEnv: process.env.DD_ENV as string,
+  delphiAutoRefreshDebounceMs: parseInt(
+    process.env.DELPHI_AUTO_REFRESH_DEBOUNCE_MS || "300000",
+    10
+  ),
+  delphiAutoRefreshEnabled: isTrueOrBlank(
+    process.env.DELPHI_AUTO_REFRESH_ENABLED
+  ),
+  delphiAutoRefreshMaxDelayMs: parseInt(
+    process.env.DELPHI_AUTO_REFRESH_MAX_DELAY_MS || "3600000",
+    10
+  ),
+  delphiAutoRefreshMinIntervalMs: parseInt(
+    process.env.DELPHI_AUTO_REFRESH_MIN_INTERVAL_MS || "1800000",
+    10
+  ),
+  delphiAutoRefreshMinStatements: parseInt(
+    process.env.DELPHI_AUTO_REFRESH_MIN_STATEMENTS || "5",
+    10
+  ),
   dynamoDbEndpoint: process.env.DYNAMODB_ENDPOINT || null,
   emailTransportTypes: process.env.EMAIL_TRANSPORT_TYPES || null,
   externalApiKey: process.env.EXTERNAL_API_KEY || null,

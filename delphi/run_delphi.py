@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--verbose", action="store_true", help="Show detailed logs")
     parser.add_argument("--force", action="store_true", help="Force reprocessing even if data exists")
     parser.add_argument("--validate", action="store_true", help="Run extra validation checks")
+    parser.add_argument("--skip-visualizations", action="store_true", help="Skip datamap image generation for data-only jobs")
     parser.add_argument("--help", action="store_true", help="Show this help message")
     parser.add_argument('--include_moderation', type=bool, default=False, help='Whether or not to include moderated comments in reports. If false, moderated comments will appear.')
     parser.add_argument('--exclude_comment_selections', type=bool, default=True, help='Whether to exclude comments with selection=-1 in report_comment_selections table.')
@@ -122,6 +123,8 @@ def main():
         f"--exclude_comment_selections={args.exclude_comment_selections}",
         "--use-ollama"
     ]
+    if args.skip_visualizations:
+        umap_command.append("--skip-visualizations")
     if verbose_arg:
         umap_command.append(verbose_arg)
 
@@ -164,7 +167,7 @@ def main():
         print(f"{RED}Warning: Priority calculation failed with exit code {priority_exit_code}{NC}")
         print("Continuing with visualization...")
 
-    if pipeline_exit_code == 0:
+    if pipeline_exit_code == 0 and not args.skip_visualizations:
         print(f"{YELLOW}Creating visualizations with datamapplot...{NC}")
 
         # Create output directory
@@ -250,11 +253,13 @@ def main():
 
         print(f"{GREEN}UMAP Narrative pipeline completed successfully!{NC}")
         print(f"Results stored in DynamoDB and visualizations for conversation {zid}")
-    else:
+    elif pipeline_exit_code != 0:
         print(f"{RED}Warning: UMAP Narrative pipeline returned non-zero exit code: {pipeline_exit_code}{NC}")
         print("The pipeline may have encountered errors but might still have produced partial results.")
         # Don't fail the overall script, just warn
         pipeline_exit_code = 0
+    else:
+        print(f"{YELLOW}Skipping visualizations for this data-only job.{NC}")
 
 
     exit_code = pipeline_exit_code # Based on the logic, this will be 0 unless math pipeline failed earlier
