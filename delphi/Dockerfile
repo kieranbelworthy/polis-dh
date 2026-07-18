@@ -34,10 +34,12 @@
   # Copy only dependency files first - this layer is cached unless dependencies change
   COPY pyproject.toml requirements.lock ./
 
-# Install dependencies from lock file (cached layer - reused unless requirements.lock changes)
-# BuildKit cache mount keeps uv cache between builds for faster rebuilds
-# If USE_CPU_TORCH is true, we install CPU-specific wheels and filter them out of the lockfile
-RUN --mount=type=cache,target=/root/.cache/uv \
+# Install dependencies from the lock file in a normal Docker layer. Do not use
+# BuildKit-only cache mounts here: this image is also built by Heroku's classic
+# container builder, which rejects RUN --mount syntax.
+# If USE_CPU_TORCH is true, install CPU-specific wheels and filter them out of
+# the lockfile.
+RUN \
     if [ "$USE_CPU_TORCH" = "true" ]; then \
         echo "USE_CPU_TORCH=true: Installing CPU-only PyTorch..." && \
         uv pip install --index-url https://download.pytorch.org/whl/cpu \
@@ -61,8 +63,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
   # Install the project package (without dependencies - they're already installed)
   # This registers entry points and installs the package in development mode
-  RUN --mount=type=cache,target=/root/.cache/uv \
-      uv pip install --no-deps .
+  RUN uv pip install --no-deps .
 
   # Bundle the default embedding model so production jobs do not depend on a
   # runtime download or a persistent model volume.
@@ -128,9 +129,8 @@ COPY --from=builder /opt/uv/uv /usr/local/bin/uv
 ENV UV_SYSTEM_PYTHON=1
 COPY pyproject.toml .
 
-# Install dev dependencies (pytest, etc.) using caching
-RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install ".[dev]"
+# Keep the test target compatible with non-BuildKit Docker builders too.
+RUN uv pip install ".[dev]"
 
 # Default command for test container (can be overridden)
 CMD ["tail", "-f", "/dev/null"]

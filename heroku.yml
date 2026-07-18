@@ -7,7 +7,12 @@ build:
     # math worker container
     worker: math/Dockerfile
     # self-managed PostgreSQL theme analysis worker
-    delphi: delphi/Dockerfile
+    # Build the production stage explicitly. The Dockerfile's trailing `test`
+    # stage is intentionally available to local/CI builds but is not a runtime
+    # image and includes development-only dependencies.
+    delphi:
+      dockerfile: delphi/Dockerfile
+      target: final
 release:
   image: web
   command:

@@ -28,6 +28,23 @@ describe("external management API deployment isolation", () => {
     );
   });
 
+  test("the Heroku Delphi build uses portable Docker syntax and the production stage", () => {
+    const manifest = readRepoFile("heroku.yml");
+    const dockerfile = readRepoFile("delphi/Dockerfile");
+    const composeManifest = readRepoFile("docker-compose.yml");
+    const makefile = readRepoFile("delphi/Makefile");
+
+    expect(manifest).toMatch(
+      /delphi:\s+dockerfile: delphi\/Dockerfile\s+target: final/
+    );
+    expect(dockerfile).not.toMatch(/^\s*RUN\s+--mount=/m);
+    expect(composeManifest).toMatch(
+      /delphi:\s+image:[^\n]+\s+build:\s+context: \.\/delphi\s+target: final/
+    );
+    expect(makefile).toContain("docker build --target final");
+    expect(makefile).toContain("docker build --target final --no-cache");
+  });
+
   test("both fresh Docker database modes install the theme schema", () => {
     const freshDatabaseImage = readRepoFile("server/Dockerfile-db");
     const restoredDatabaseImage = readRepoFile("server/Dockerfile-pdb");

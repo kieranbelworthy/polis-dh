@@ -40,29 +40,27 @@ The optimized Dockerfile uses a **layered caching strategy**:
 ```dockerfile
 # NEW: Fast approach
 COPY pyproject.toml requirements.lock ./
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.lock
+RUN uv pip install -r requirements.lock
 
 COPY polismath/ umap_narrative/ scripts/ *.py ./
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install --no-deps .
+RUN uv pip install --no-deps .
 ```
 
 ### Key Technologies
 
 1. **requirements.lock**: Pinned dependency versions from `pip-compile`
-2. **BuildKit cache mounts**: Persistent pip cache between builds
+2. **Portable Docker layers**: Works with both BuildKit and classic builders
 3. **Layered copying**: Dependencies → Source code → Package registration
 4. **Optimized .dockerignore**: Excludes unnecessary files from build context
 
 ## Performance Improvements
 
-| Build Scenario | Before | After | Improvement |
-|---------------|--------|-------|-------------|
-| Clean build (no cache) | ~15 min | ~15 min | Same |
-| Code change only | ~15 min | **~30 sec** | **30x faster** |
-| Dependency update | ~15 min | ~5-8 min | 2-3x faster |
-| With warm BuildKit cache | ~15 min | **~15 sec** | **60x faster** |
+| Build Scenario               | Before  | After       | Improvement    |
+| ---------------------------- | ------- | ----------- | -------------- |
+| Clean build (no cache)       | ~15 min | ~15 min     | Same           |
+| Code change only             | ~15 min | **~30 sec** | **30x faster** |
+| Dependency update            | ~15 min | ~5-8 min    | 2-3x faster    |
+| With warm Docker layer cache | ~15 min | **~30 sec** | **30x faster** |
 
 ## Development Workflow
 
@@ -160,20 +158,22 @@ pandas==2.3.3
 ...
 ```
 
-## BuildKit Cache Mounts
+## Portable Layer Caching
 
-### What They Do
+The Dockerfile intentionally avoids BuildKit-only `RUN --mount` instructions.
+Heroku's classic container builder rejects that syntax, while normal dependency
+layers work with both classic Docker and BuildKit.
 
-BuildKit cache mounts preserve pip's download cache between builds:
+Dependency installation remains in its own layer:
 
 ```dockerfile
-RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.lock
+COPY pyproject.toml requirements.lock ./
+RUN uv pip install -r requirements.lock
 ```
 
-- **Cache location**: `/root/.cache/pip`
-- **Persistence**: Lives outside the image, reused across builds
-- **Benefit**: Downloaded wheels don't need re-fetching
+- **Portability**: Heroku and standard Docker use the same Dockerfile
+- **Persistence**: Docker reuses the layer while dependency files are unchanged
+- **Benefit**: Source-only changes don't reinstall dependencies
 
 ### Cache Management
 
@@ -277,11 +277,10 @@ export DOCKER_BUILDKIT=1
 make docker-build
 ```
 
-Verify cache mounts are working:
+Inspect whether Docker is reusing image layers:
 
 ```bash
-# Check BuildKit cache
-docker system df -v | grep buildkit
+docker history polis/delphi:latest
 ```
 
 ### Cache Issues
@@ -355,7 +354,7 @@ The `Dockerfile` includes a `test` stage specifically for CI/CD pipelines:
          context: ./delphi
          target: test
          args:
-           USE_CPU_TORCH: "true"  # Saves ~800MB by using CPU-only PyTorch wheels
+           USE_CPU_TORCH: "true" # Saves ~800MB by using CPU-only PyTorch wheels
    ```
 
 ## References
@@ -371,7 +370,7 @@ The optimized Docker build strategy provides:
 
 1. **30x faster** rebuilds for code changes
 2. **Reproducible** builds via lock file
-3. **Persistent** cache with BuildKit mounts
+3. **Portable** Docker dependency-layer caching
 4. **Smaller** build context with .dockerignore
 5. **Better** developer experience
 
