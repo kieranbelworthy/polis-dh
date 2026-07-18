@@ -6,14 +6,26 @@ This document provides information about the Delphi Docker container setup and o
 
 When the Delphi container starts, it performs the following steps:
 
-1. Initializes DynamoDB tables using `create_dynamodb_tables.py`
-2. Starts the job poller service using `start_poller.sh`
+1. Starts the PostgreSQL automatic-theme worker.
+2. Initializes the legacy DynamoDB tables and starts the legacy job poller,
+   preserving the container's behavior from before automatic themes were added.
+3. When `DYNAMODB_ENDPOINT` is set, also prepares the local MinIO bucket and
+   Ollama model. Remote AWS deployments retain their existing `ddtrace`
+   startup path in `us-east-1`.
+
+The platform-specific `--postgres-only` command-line flag suppresses the
+legacy worker. Heroku selects this mode in `heroku.yml`; it is not the default
+Docker image behavior.
 
 ## Environment Variables
 
 The following environment variables control the container's behavior:
 
-- `DYNAMODB_ENDPOINT`: URL of the DynamoDB service (default: http://dynamodb:8000)
+- `DYNAMODB_ENDPOINT`: Optional URL selecting local legacy DynamoDB setup
+- `DELPHI_DYNAMODB_ENABLED`: Optional explicit override. Legacy DynamoDB is
+  enabled by default for backward compatibility; set this to `false` for a
+  PostgreSQL-themes-only standard Docker deployment.
+- `DELPHI_AUTO_REFRESH_ENABLED`: Enables PostgreSQL automatic themes (default: true)
 - `POLL_INTERVAL`: Polling interval in seconds for the job poller (default: 2)
 - `LOG_LEVEL`: Logging level (default: INFO)
 - `DATABASE_URL`: PostgreSQL database URL for math pipeline
@@ -23,18 +35,20 @@ The following environment variables control the container's behavior:
 
 The Delphi container runs the following services:
 
-1. **DynamoDB Integration**: Creates and maintains tables in DynamoDB for storing results
-2. **Job Poller**: Continuously polls the DynamoDB job queue for new jobs
-3. **Math Pipeline**: Processes conversations from PostgreSQL using the Python math pipeline
+1. **Automatic Theme Worker**: Polls PostgreSQL and atomically publishes versioned themes and assignments.
+2. **Legacy Job Poller**: Runs by default for backward compatibility, or can be
+   disabled explicitly without affecting automatic themes.
+3. **Theme Pipeline**: Embeds and clusters eligible conversation statements without requiring Ollama.
 
 ## Troubleshooting
 
-If the container exits with code 127, check that:
+If the container exits, check that:
 
-1. The scripts directory is correctly copied into the container
-2. The `start_poller.sh` script is executable
-3. The DynamoDB endpoint is correct and accessible
+1. `DATABASE_URL` is correct and the theme migration has run.
+2. The dyno or container has enough memory for sentence-transformers, UMAP, and EVōC.
+3. If legacy jobs are enabled, the DynamoDB endpoint or AWS credentials are correct.
 
 ## Maintaining State
 
-The container stores results in DynamoDB, which persists its data to the `dynamodb-data` volume.
+Automatic theme results are stored in PostgreSQL. Legacy Delphi results remain
+in DynamoDB when that optional worker is enabled.

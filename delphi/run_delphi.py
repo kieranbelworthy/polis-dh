@@ -10,6 +10,19 @@ YELLOW = '\033[0;33m'
 RED = '\033[0;31m'
 NC = '\033[0m' # No Color
 
+
+def parse_bool_argument(value):
+    """Parse explicit true/false CLI values without bool("false") == True."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got: {value}")
+
+
 def show_usage():
     print("Process a Polis conversation with the Delphi analytics pipeline.")
     print()
@@ -34,8 +47,8 @@ def main():
     parser.add_argument("--validate", action="store_true", help="Run extra validation checks")
     parser.add_argument("--skip-visualizations", action="store_true", help="Skip datamap image generation for data-only jobs")
     parser.add_argument("--help", action="store_true", help="Show this help message")
-    parser.add_argument('--include_moderation', type=bool, default=False, help='Whether or not to include moderated comments in reports. If false, moderated comments will appear.')
-    parser.add_argument('--exclude_comment_selections', type=bool, default=True, help='Whether to exclude comments with selection=-1 in report_comment_selections table.')
+    parser.add_argument('--include_moderation', type=parse_bool_argument, default=False, help='Whether to filter moderated comments out of reports.')
+    parser.add_argument('--exclude_comment_selections', type=parse_bool_argument, default=True, help='Whether to exclude comments with selection=-1 in report_comment_selections table.')
     parser.add_argument('--region', type=str, default='us-east-1', help='AWS region')
 
     args = parser.parse_args()
@@ -46,6 +59,10 @@ def main():
 
     zid = args.zid
     rid = args.rid
+    model = os.environ.get("OLLAMA_MODEL")
+    if not model:
+        print(f"{RED}Error: OLLAMA_MODEL environment variable not set. Existing Delphi data was not reset.{NC}")
+        sys.exit(1)
     verbose_arg = "--verbose" if args.verbose else ""
     force_arg = "--force" if args.force else ""
     # validate_arg is not used in the python script execution steps, but kept for parity with bash
@@ -71,11 +88,6 @@ def main():
 
     print(f"{GREEN}Processing conversation {zid}...{NC}")
 
-    # Set model
-    model = os.environ.get("OLLAMA_MODEL")
-    if not model:
-        print(f"{RED}Error: OLLAMA_MODEL environment variable not set.{NC}")
-        sys.exit(1)
     print(f"{YELLOW}Using Ollama model: {model}{NC}")
 
     # Set up environment for the pipeline
@@ -130,6 +142,9 @@ def main():
 
     pipeline_process = subprocess.run(umap_command)
     pipeline_exit_code = pipeline_process.returncode
+    if pipeline_exit_code != 0:
+        print(f"{RED}UMAP Narrative pipeline failed with exit code: {pipeline_exit_code}{NC}")
+        sys.exit(pipeline_exit_code)
 
     # Calculate and store comment extremity values
     print(f"{GREEN}Calculating comment extremity values...{NC}")
@@ -253,27 +268,15 @@ def main():
 
         print(f"{GREEN}UMAP Narrative pipeline completed successfully!{NC}")
         print(f"Results stored in DynamoDB and visualizations for conversation {zid}")
-    elif pipeline_exit_code != 0:
-        print(f"{RED}Warning: UMAP Narrative pipeline returned non-zero exit code: {pipeline_exit_code}{NC}")
-        print("The pipeline may have encountered errors but might still have produced partial results.")
-        # Don't fail the overall script, just warn
-        pipeline_exit_code = 0
     else:
         print(f"{YELLOW}Skipping visualizations for this data-only job.{NC}")
 
 
-    exit_code = pipeline_exit_code # Based on the logic, this will be 0 unless math pipeline failed earlier
+    exit_code = pipeline_exit_code
 
     if exit_code == 0: # This condition relies on math_exit_code check above.
         print(f"{GREEN}Pipeline completed successfully!{NC}")
         print(f"Results stored in DynamoDB for conversation {zid}")
-    else:
-        # This part of the logic seems unreachable given the sys.exit() after math_pipeline failure
-        # and resetting pipeline_exit_code to 0 in the warning case.
-        # However, keeping it for structural parity.
-        print(f"{RED}Pipeline failed with exit code {exit_code}{NC}")
-        print("Please check logs for more details")
-
     sys.exit(exit_code)
 
 if __name__ == "__main__":

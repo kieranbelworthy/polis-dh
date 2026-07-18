@@ -64,6 +64,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
   RUN --mount=type=cache,target=/root/.cache/uv \
       uv pip install --no-deps .
 
+  # Bundle the default embedding model so production jobs do not depend on a
+  # runtime download or a persistent model volume.
+  RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2').save_pretrained('/opt/models/all-MiniLM-L6-v2')"
+
   RUN echo "--- PyTorch Check (after pyproject.toml installation) ---" && \
       pip show torch torchvision torchaudio && \
       python -c "import torch; print(f'Torch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')" && \
@@ -95,36 +99,16 @@ COPY --from=builder /app/polismath/ ./polismath/
 COPY --from=builder /app/scripts/ ./scripts/
 COPY --from=builder /app/umap_narrative/ ./umap_narrative/
 COPY --from=builder /app/*.py ./
+COPY --from=builder /opt/models /opt/models
 
 RUN mkdir -p data
 EXPOSE 8080
 # PYTHONPATH not needed since packages are properly installed via pip
 
 # Make scripts executable
-RUN chmod +x run_delphi.py scripts/setup_ollama.sh
+RUN chmod +x run_delphi.py scripts/setup_ollama.sh scripts/start_workers.py scripts/postgres_theme_worker.py
 
-CMD ["bash", "-c", "\
-  echo 'Ensuring DynamoDB tables are set up (runs in all environments)...'; \
-  python create_dynamodb_tables.py --region ${AWS_REGION} && \
-  echo 'DynamoDB table setup script finished.'; \
-  \
-  if [ -n \"${DYNAMODB_ENDPOINT}\" ]; then \
-    echo 'DYNAMODB_ENDPOINT is set, assuming local/dev environment. Running additional local setup scripts...'; \
-    echo 'Setting up MinIO bucket...' && python setup_minio.py && \
-    echo 'Setting up Ollama model (local script)...' && ./scripts/setup_ollama.sh && \
-    echo 'Starting job poller without ddtrace...' && \
-    python scripts/job_poller.py --interval=2; \
-  else \
-    echo 'DYNAMODB_ENDPOINT is not set, assuming production-like environment. Skipping local setup scripts.'; \
-    if [ \"${AWS_REGION}\" = \"us-east-1\" ]; then \
-      echo 'Starting job poller WITH ddtrace in us-east-1...' && \
-      ddtrace-run python scripts/job_poller.py --interval=2 --region ${AWS_REGION}; \
-    else \
-      echo 'Starting job poller WITHOUT ddtrace in other regions...' && \
-      python scripts/job_poller.py --interval=2 --region ${AWS_REGION}; \
-    fi; \
-  fi \
-"]
+CMD ["python", "scripts/start_workers.py"]
 
 # ---- Stage 3: Test ----
 # Extends final stage with dev dependencies for CI/testing

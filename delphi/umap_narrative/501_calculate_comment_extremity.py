@@ -30,6 +30,19 @@ from polismath_commentgraph.utils.group_data import GroupDataProcessor
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
+
+def parse_bool_argument(value):
+    """Parse explicit true/false CLI values without bool("false") == True."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got: {value}")
+
+
 def calculate_and_store_extremity(conversation_id: int, force_recalculation: bool = False, include_moderation: bool = False, exclude_comment_selections: bool = True) -> Dict[int, float]:
     """
     Calculate and store extremity values for all comments in a conversation.
@@ -189,8 +202,8 @@ def main():
     parser.add_argument('--zid', type=int, required=True, help='Conversation ID')
     parser.add_argument('--force', action='store_true', help='Force recalculation of values')
     parser.add_argument('--verbose', action='store_true', help='Show detailed output')
-    parser.add_argument('--include_moderation', type=bool, default=False, help='Whether or not to include moderated comments in reports. If false, moderated comments will appear.')
-    parser.add_argument('--exclude_comment_selections', type=bool, default=True, help='Whether to exclude comments with selection=-1 in report_comment_selections table.')
+    parser.add_argument('--include_moderation', type=parse_bool_argument, default=False, help='Whether to filter moderated comments out of reports.')
+    parser.add_argument('--exclude_comment_selections', type=parse_bool_argument, default=True, help='Whether to exclude comments with selection=-1 in report_comment_selections table.')
     args = parser.parse_args()
     
     # Set log level based on verbosity

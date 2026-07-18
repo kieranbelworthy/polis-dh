@@ -1,6 +1,9 @@
 import pg from "../db/pg-query";
 import logger from "./logger";
-import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBClient,
+  type DynamoDBClientConfig,
+} from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import Config from "../config";
 import LruCache from "lru-cache";
@@ -65,15 +68,9 @@ const clusterAssignmentsCache = new LruCache<
  * Initialize DynamoDB client following the pattern from collectiveStatement.ts
  */
 function createDynamoDBClient(): DynamoDBDocumentClient {
-  const dynamoDBConfig: {
-    region: string;
-    endpoint?: string;
-    credentials?: {
-      accessKeyId: string;
-      secretAccessKey: string;
-    };
-  } = {
+  const dynamoDBConfig: DynamoDBClientConfig = {
     region: Config.AWS_REGION || "us-east-1",
+    maxAttempts: 2,
   };
 
   if (Config.dynamoDbEndpoint) {
@@ -113,8 +110,80 @@ function createDynamoDBClient(): DynamoDBDocumentClient {
  */
 export async function getClusterAssignments(
   zid: number,
-  useCache = false
+  useCache = false,
+  allowDynamoFallback = true,
+  preferPostgresThemes = false,
+  postgresRunId?: string
 ): Promise<Map<number, ClusterAssignment>> {
+  if (preferPostgresThemes) {
+    try {
+      let runId = postgresRunId;
+      if (!runId) {
+        const runs = await pg.queryP_readOnly<{ run_id: string }>(
+          "SELECT run_id FROM delphi_theme_runs WHERE zid = ($1) " +
+            "ORDER BY generated_at DESC LIMIT 1;",
+          [zid]
+        );
+        runId = runs[0]?.run_id;
+      }
+      if (runId) {
+        const rows = await pg.queryP_readOnly<{
+          tid: number;
+          layer_id: number;
+          cluster_id: number;
+          confidence: number | null;
+          distance_to_centroid: number | null;
+        }>(
+          "SELECT tid, layer_id, cluster_id, confidence, distance_to_centroid " +
+            "FROM delphi_theme_assignments WHERE run_id = ($1) " +
+            "ORDER BY tid, layer_id;",
+          [runId]
+        );
+        const postgresAssignments = new Map<number, ClusterAssignment>();
+        for (const row of rows) {
+          const existing = postgresAssignments.get(row.tid) || {
+            conversation_id: String(zid),
+            comment_id: row.tid,
+            cluster_confidence: {},
+            distance_to_centroid: {},
+          };
+          existing[`layer${row.layer_id}_cluster_id`] = row.cluster_id;
+          if (row.confidence !== null) {
+            (existing.cluster_confidence as Record<string, number>)[
+              `layer${row.layer_id}`
+            ] = row.confidence;
+          }
+          if (row.distance_to_centroid !== null) {
+            (existing.distance_to_centroid as Record<string, number>)[
+              `layer${row.layer_id}`
+            ] = row.distance_to_centroid;
+          }
+          postgresAssignments.set(row.tid, existing);
+        }
+        return postgresAssignments;
+      }
+    } catch (error: unknown) {
+      const code =
+        error && typeof error === "object" && "code" in error
+          ? String((error as { code?: unknown }).code)
+          : "";
+      if (code !== "42P01") {
+        logger.warn(
+          `Could not retrieve PostgreSQL theme assignments for conversation ${zid}: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        if (!allowDynamoFallback) {
+          return new Map<number, ClusterAssignment>();
+        }
+      }
+    }
+  }
+
+  if (!allowDynamoFallback) {
+    return new Map<number, ClusterAssignment>();
+  }
+
   // Check cache if enabled
   if (useCache) {
     const cached = clusterAssignmentsCache.get(zid);

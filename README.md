@@ -237,6 +237,8 @@ In particular
   - enable and add API keys for 3rd party services (e.g. automatic comment translation, spam filtering, etc)
 - [🔏 Set up SSL/HTTPS](docs/ssl.md), to keep the site secure
 - [📈 Scale](docs/scaling.md) for large or many concurrent conversations
+- [🔌 Configure the external management API](server/docs/EXTERNAL_MANAGEMENT_API.md)
+- [Deploy automatic theme analysis on Heroku](docs/heroku-theme-deployment.md)
 
 ### Support
 

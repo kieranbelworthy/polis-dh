@@ -194,10 +194,11 @@ async function markJobAsFailedInDb(jobId: number, errorMessage: string) {
 
 async function buildCommentMap(zid: number): Promise<Map<string, number>> {
   const query = `SELECT tid, original_id FROM comments WHERE zid = $1 AND original_id IS NOT NULL`;
-  const result = await pg.queryP(query, [zid]);
+  const result = await pg.queryP<{ original_id: string; tid: number }>(query, [
+    zid,
+  ]);
   const map = new Map<string, number>();
-  // @ts-expect-error queryp unknown
-  result.forEach((row: any) => map.set(row.original_id, row.tid));
+  result.forEach((row) => map.set(row.original_id, row.tid));
   return map;
 }
 

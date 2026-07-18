@@ -314,13 +314,17 @@ async function triggerImportWorker(payload: {
     RETURNING id;
   `;
 
-  const res = await pg.queryP(query, [payload.zid, payload.s3Key]);
+  const res = await pg.queryP<{ id: number }>(query, [
+    payload.zid,
+    payload.s3Key,
+  ]);
   const jobId = res[0].id;
 
   try {
-    const userRes = await pg.queryP(`SELECT email FROM users WHERE uid = $1`, [
-      payload.uid,
-    ]);
+    const userRes = await pg.queryP<{ email: string | null }>(
+      `SELECT email FROM users WHERE uid = $1`,
+      [payload.uid]
+    );
     const userEmail = userRes[0]?.email;
     const command = new SendMessageCommand({
       QueueUrl: Config.SQS_QUEUE_URL,
@@ -379,7 +383,6 @@ async function handle_POST_votes_bulk(
       LIMIT 1;
     `;
     const validationResult = await pg.queryP_readOnly(validationQuery, [zid]);
-    // @ts-expect-error check on unknown
     if (validationResult?.length === 0) {
       failJson(res, 400, "polis_err_votes_bulk_no_mappable_comments");
       return;

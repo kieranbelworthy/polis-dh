@@ -6,6 +6,7 @@ This script fetches conversation data from PostgreSQL, processes it using
 EVōC for clustering, and generates interactive visualizations with topic labeling.
 """
 
+import argparse
 import json
 import logging
 import os
@@ -32,6 +33,25 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
+
+
+def parse_bool_argument(value):
+    """Parse explicit true/false CLI values without bool("false") == True."""
+    if isinstance(value, bool):
+        return value
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Expected a boolean value, got: {value}")
+
+
+def require_complete_batch_write(result, label):
+    """Fail the job instead of publishing a silently partial theme dataset."""
+    failure_count = int(result.get("failure", 0))
+    if failure_count > 0:
+        raise RuntimeError(f"{label} had {failure_count} failed DynamoDB writes")
 
 
 def setup_environment(
@@ -1148,6 +1168,7 @@ def process_layers_and_create_visualizations(
                 logger.info(
                     f"Stored {result['success']} LLM topic names with {result['failure']} failures"
                 )
+                require_complete_batch_write(result, "LLM topic name export")
 
             # Create a new static datamapplot with the LLM labels
             # logger.info(f"Generating static datamapplot with LLM labels for layer {layer_idx}...")
@@ -1447,6 +1468,7 @@ def process_conversation(
         logger.info(
             f"Stored {result['success']} cluster assignments with {result['failure']} failures"
         )
+        require_complete_batch_write(result, "Cluster assignment export")
 
         # Store cluster topics (basic info only)
         logger.info("Storing cluster topics...")
@@ -1488,9 +1510,6 @@ def process_conversation(
 
 def main():
     """Main entry point."""
-    # Parse arguments
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="Process Polis conversation from PostgreSQL"
     )
@@ -1528,13 +1547,13 @@ def main():
     )
     parser.add_argument(
         "--include_moderation",
-        type=bool,
+        type=parse_bool_argument,
         default=False,
-        help="Whether or not to include moderated comments in reports. If false, moderated comments will appear.",
+        help="Whether to filter moderated comments out of reports.",
     )
     parser.add_argument(
         "--exclude_comment_selections",
-        type=bool,
+        type=parse_bool_argument,
         default=True,
         help="Whether to exclude comments with selection=-1 in report_comment_selections table.",
     )
@@ -1606,7 +1625,7 @@ def main():
         )
     else:
         # Process with real data from PostgreSQL
-        process_conversation(
+        processed = process_conversation(
             args.zid,
             export_dynamo=not args.no_dynamo,
             use_ollama=args.use_ollama,
@@ -1614,6 +1633,10 @@ def main():
             exclude_comment_selections=args.exclude_comment_selections,
             generate_visualizations=not args.skip_visualizations,
         )
+        if processed is False:
+            raise RuntimeError(
+                f"Conversation {args.zid} could not be processed into theme data"
+            )
 
 
 if __name__ == "__main__":

@@ -159,7 +159,10 @@ async function isParentDomainWhitelisted(
 ): Promise<boolean> {
   try {
     // Fetch whitelist configuration
-    const config = await pg.queryP_readOnly(
+    const config = await pg.queryP_readOnly<{
+      domain_whitelist: string | null;
+      domain_whitelist_override_key: string | null;
+    }>(
       `SELECT sdw.domain_whitelist, sdw.domain_whitelist_override_key
        FROM site_domain_whitelist sdw
        JOIN users u ON u.site_id = sdw.site_id  
@@ -338,7 +341,7 @@ async function setDomainWhitelist(
 }
 
 async function getDomainWhitelist(uid: number): Promise<string> {
-  const rows = await pg.queryP(
+  const rows = await pg.queryP<{ domain_whitelist: string | null }>(
     `SELECT domain_whitelist 
      FROM site_domain_whitelist 
      WHERE site_id = (SELECT site_id FROM users WHERE uid = $1)`,

@@ -1,16 +1,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "@jest/globals";
-import { GetCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import fs from "node:fs";
+import path from "node:path";
 import type { Agent } from "supertest";
 
 import { newAgent } from "../setup/api-test-helpers";
 import { pool } from "../setup/db-test-helpers";
-import {
-  cleanupDelphiJobs,
-  cleanupDelphiTopicData,
-  createDelphiTopicCluster,
-  docClient,
-  ensureJobQueueTableExists,
-} from "../setup/dynamodb-test-helpers";
 
 const EXTERNAL_API_KEY = "test-external-api-key";
 
@@ -29,14 +23,22 @@ describe("External Management API", () => {
     ownerUserId = Number(owner.rows[0].uid);
     process.env.EXTERNAL_API_OWNER_USER_ID = String(ownerUserId);
 
-    await ensureJobQueueTableExists();
+    await pool.query(
+      fs.readFileSync(
+        path.resolve(
+          __dirname,
+          "../../postgres/migrations/000020_create_delphi_theme_analysis.sql"
+        ),
+        "utf8"
+      )
+    );
     agent = await newAgent();
   });
 
   afterAll(async () => {
     for (const zid of delphiConversationIds) {
-      await cleanupDelphiTopicData(zid);
-      await cleanupDelphiJobs(String(zid));
+      await pool.query("DELETE FROM delphi_theme_runs WHERE zid = $1", [zid]);
+      await pool.query("DELETE FROM delphi_theme_jobs WHERE zid = $1", [zid]);
     }
   });
 
@@ -128,6 +130,46 @@ describe("External Management API", () => {
     return Number(result.rows[0].count);
   }
 
+  async function createDelphiTopicCluster(
+    zid: number,
+    topicKey: string,
+    tids: number[],
+    layerId = 0,
+    clusterId = 1
+  ): Promise<void> {
+    const [jobId] = topicKey.split("#");
+    const job = await pool.query(
+      "SELECT source_revision FROM delphi_theme_jobs WHERE zid = $1",
+      [zid]
+    );
+    const sourceRevision = Number(job.rows[0]?.source_revision || 1);
+    await pool.query(
+      "INSERT INTO delphi_theme_runs " +
+        "(run_id, zid, source_revision, embedding_model, label_method) " +
+        "VALUES ($1, $2, $3, 'test-embedding-model', 'tfidf-keywords-v1')",
+      [jobId, zid, sourceRevision]
+    );
+    await pool.query(
+      "INSERT INTO delphi_themes " +
+        "(run_id, layer_id, cluster_id, topic_name, model_name) " +
+        "VALUES ($1, $2, $3, $4, 'test-model')",
+      [jobId, layerId, clusterId, `Test Topic ${topicKey}`]
+    );
+    for (const tid of tids) {
+      await pool.query(
+        "INSERT INTO delphi_theme_assignments " +
+          "(run_id, tid, layer_id, cluster_id, confidence, distance_to_centroid) " +
+          "VALUES ($1, $2, $3, $4, 0.9, 0.5)",
+        [jobId, tid, layerId, clusterId]
+      );
+    }
+    await pool.query(
+      "UPDATE delphi_theme_jobs SET completed_revision = source_revision, " +
+        "status = 'completed', completed_at = NOW() WHERE zid = $1",
+      [zid]
+    );
+  }
+
   test("rejects missing and invalid API keys", async () => {
     const missing = await agent.post("/api/v3/external/conversations").send({
       topic: "Missing auth",
@@ -213,44 +255,26 @@ describe("External Management API", () => {
 
     const zid = await getConversationNumericId(conversationId);
     delphiConversationIds.push(zid);
-    const jobId = `auto-theme-refresh-${zid}`;
-    const scheduled = await docClient.send(
-      new GetCommand({
-        TableName: "Delphi_JobQueue",
-        Key: { job_id: jobId },
-        ConsistentRead: true,
-      })
+    const scheduled = await pool.query(
+      "SELECT * FROM delphi_theme_jobs WHERE zid = $1",
+      [zid]
     );
-    expect(scheduled.Item).toMatchObject({
-      job_id: jobId,
-      status: "PENDING",
-      conversation_id: String(zid),
-      auto_managed: true,
-      refresh_kind: "themes",
+    expect(scheduled.rows[0]).toMatchObject({
+      zid,
+      status: "pending",
     });
-    expect(new Date(scheduled.Item?.not_before).getTime()).toBeGreaterThan(
+    expect(new Date(scheduled.rows[0].not_before).getTime()).toBeGreaterThan(
       Date.now()
     );
-    expect(JSON.parse(scheduled.Item?.job_config)).toMatchObject({
-      generate_visualizations: false,
-    });
+    expect(Number(scheduled.rows[0].source_revision)).toBe(5);
+    expect(Number(scheduled.rows[0].completed_revision)).toBe(0);
 
-    await docClient.send(
-      new UpdateCommand({
-        TableName: "Delphi_JobQueue",
-        Key: { job_id: jobId },
-        UpdateExpression:
-          "SET #status = :processing, #version = #version + :one, started_at = :now REMOVE not_before, dirty_since",
-        ExpressionAttributeNames: {
-          "#status": "status",
-          "#version": "version",
-        },
-        ExpressionAttributeValues: {
-          ":processing": "PROCESSING",
-          ":one": 1,
-          ":now": new Date().toISOString(),
-        },
-      })
+    await pool.query(
+      "UPDATE delphi_theme_jobs SET status = 'processing', " +
+        "processing_revision = source_revision, started_at = NOW(), " +
+        "lease_owner = 'test-worker', lease_expires_at = NOW() + INTERVAL '10 minutes' " +
+        "WHERE zid = $1",
+      [zid]
     );
 
     const duringRun = await createExternalComment(
@@ -263,20 +287,27 @@ describe("External Management API", () => {
       rerunRequested: true,
     });
 
-    const processing = await docClient.send(
-      new GetCommand({
-        TableName: "Delphi_JobQueue",
-        Key: { job_id: jobId },
-        ConsistentRead: true,
-      })
+    const processing = await pool.query(
+      "SELECT * FROM delphi_theme_jobs WHERE zid = $1",
+      [zid]
     );
-    expect(processing.Item).toMatchObject({
-      status: "PROCESSING",
-      rerun_requested: true,
+    expect(processing.rows[0].status).toBe("processing");
+    expect(Number(processing.rows[0].source_revision)).toBe(6);
+    expect(Number(processing.rows[0].processing_revision)).toBe(5);
+
+    const voteResponse = await externalPost(
+      `/api/v3/external/conversations/${conversationId}/votes`
+    ).send({
+      externalParticipantId: `auto-theme-voter-${Date.now()}`,
+      statementId: comments[0].statementId,
+      vote: -1,
     });
-    expect(
-      new Date(processing.Item?.next_not_before).getTime()
-    ).toBeGreaterThan(Date.now());
+    expect(voteResponse.status).toBe(200);
+    const afterVote = await pool.query(
+      "SELECT source_revision FROM delphi_theme_jobs WHERE zid = $1",
+      [zid]
+    );
+    expect(Number(afterVote.rows[0].source_revision)).toBe(6);
   });
 
   test("records and changes latest votes by external participant ID", async () => {

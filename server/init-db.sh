@@ -14,3 +14,7 @@ pg_restore -j4 --no-owner --no-privileges -U "$POSTGRES_USER" -d "$POSTGRES_DB" 
 
 echo "Resetting user sequences to match restored data..."
 psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT setval('users_uid_seq', (SELECT COALESCE(MAX(uid), 1) FROM users));"
+
+echo "Applying portable external-API theme schema..."
+psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+    -f /opt/polis/migrations/000020_create_delphi_theme_analysis.sql

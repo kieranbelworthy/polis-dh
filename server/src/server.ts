@@ -399,7 +399,7 @@ ${message}`;
     return emailTeam("Polis Bad Problems!!!", body);
   }
 
-  function handle_GET_verification(
+  async function handle_GET_verification(
     req: { p: { e: any } },
     res: {
       set: (arg0: string, arg1: string) => void;
@@ -407,39 +407,38 @@ ${message}`;
     }
   ) {
     const einvite = req.p.e;
-    pg.queryP("select * from einvites where einvite = ($1);", [einvite])
-      .then(function (rows: string | any[]) {
-        if (!rows.length) {
-          failJson(res, 500, "polis_err_verification_missing");
-        }
-        const email = rows[0].email;
-        return pg
-          .queryP("select email from email_validations where email = ($1);", [
-            email,
-          ])
-          .then(function (rows: string | any[]) {
-            if (rows && rows.length > 0) {
-              return true;
-            }
-            return pg.queryP(
-              "insert into email_validations (email) values ($1);",
-              [email]
-            );
-          });
-      })
-      .then(function () {
-        res.set("Content-Type", "text/html");
-        res.send(
-          `<html><body>
+    try {
+      const invites = await pg.queryP<{ email: string }>(
+        "select email from einvites where einvite = ($1);",
+        [einvite]
+      );
+      if (!invites.length) {
+        failJson(res, 500, "polis_err_verification_missing");
+        return;
+      }
+
+      const email = invites[0].email;
+      const validations = await pg.queryP<{ email: string }>(
+        "select email from email_validations where email = ($1);",
+        [email]
+      );
+      if (!validations.length) {
+        await pg.queryP("insert into email_validations (email) values ($1);", [
+          email,
+        ]);
+      }
+
+      res.set("Content-Type", "text/html");
+      res.send(
+        `<html><body>
 <div style='font-family: Futura, Helvetica, sans-serif;'>
 Email verified! You can close this tab or hit the back button.
 </div>
 </body></html>`
-        );
-      })
-      .catch(function (err: any) {
-        failJson(res, 500, "polis_err_verification", err);
-      });
+      );
+    } catch (err) {
+      failJson(res, 500, "polis_err_verification", err);
+    }
   }
 
   function handle_GET_dummyButton(

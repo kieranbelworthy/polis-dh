@@ -35,7 +35,6 @@ import {
   updateVoteCount,
 } from "../server-helpers";
 import { parsePagination, createPaginationMeta } from "../utils/pagination";
-import { scheduleAutomaticDelphiAnalysisBestEffort } from "../utils/delphiJobs";
 
 /* this is a concept and can be generalized to other handlers */
 interface PolisRequestParams {
@@ -482,7 +481,10 @@ async function handle_POST_comments(req: RequestWithP, res: any) {
     const lang_confidence = detection.confidence;
 
     // 6. Insert the comment
-    const insertedComment = await pg.queryP(
+    const insertedComment = await pg.queryP<{
+      tid: number;
+      created: number | string | Date;
+    }>(
       `INSERT INTO COMMENTS
       (pid, zid, txt, velocity, active, mod, uid, anon, is_seed, created, tid, lang, lang_confidence)
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, default, null, $10, $11)
@@ -550,14 +552,7 @@ async function handle_POST_comments(req: RequestWithP, res: any) {
     }, 100);
 
     // 10. Build response
-    const response: any = {
-      tid,
-      currentPid: pid,
-      themeRefresh: await scheduleAutomaticDelphiAnalysisBestEffort(zid, {
-        reason: "comment_created",
-        touchExisting: true,
-      }),
-    };
+    const response: any = { tid, currentPid: pid };
 
     // 11. Auth token will be automatically included by attachAuthToken middleware
 
@@ -674,14 +669,11 @@ function handle_PUT_comments(
       logger.debug(`isModerator result: ${isModerator}`);
       if (isModerator) {
         moderateCommentQuery(zid, tid, active, mod, is_meta).then(
-          async function () {
+          function () {
             logger.debug("Comment moderated successfully");
-            const themeRefresh =
-              await scheduleAutomaticDelphiAnalysisBestEffort(zid, {
-                reason: "comment_moderation_changed",
-                touchExisting: true,
-              });
-            res.status(200).json({ themeRefresh });
+            // The PostgreSQL trigger refreshes only conversations which the
+            // external API has already registered for automatic themes.
+            res.status(200).json({});
           },
           function (err: any) {
             logger.error("Error in moderateCommentQuery:", err);
@@ -978,20 +970,9 @@ async function handle_POST_comments_bulk(
       }
     }, 100);
 
-    const insertedCount = results.filter(
-      (result) => result.status === "success"
-    ).length;
-    const themeRefresh = insertedCount
-      ? await scheduleAutomaticDelphiAnalysisBestEffort(zid!, {
-          reason: "bulk_comments_created",
-          touchExisting: true,
-        })
-      : undefined;
-
     res.json({
       results,
       currentPid: pid,
-      ...(themeRefresh ? { themeRefresh } : {}),
     });
   } catch (err: any) {
     failJson(res, 500, "polis_err_post_comments_bulk", err);

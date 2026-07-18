@@ -92,9 +92,12 @@ export function fetchAndCacheLatestPcaData() {
   function pollForLatestPcaData() {
     lastPrefetchPollStartTime = Date.now();
 
-    pg.queryP_readOnly<
-      Array<{ data: any; math_tick: any; caching_tick: any; zid: number }>
-    >(
+    pg.queryP_readOnly<{
+      data: any;
+      math_tick: any;
+      caching_tick: any;
+      zid: number;
+    }>(
       "select * from math_main where caching_tick > ($1) order by caching_tick limit 10;",
       [lastPrefetchedMathTick]
     )
@@ -162,7 +165,7 @@ async function createEmptyPcaStructure(
   let nCmts = 0;
 
   try {
-    const commentsQuery = await pg.queryP_readOnly<Array<{ tid: number }>>(
+    const commentsQuery = await pg.queryP_readOnly<{ tid: number }>(
       "select tid from comments where zid = ($1) and mod >= 1 order by tid",
       [zid]
     );
@@ -356,7 +359,7 @@ export function getPca(
   const queryStart = Date.now();
 
   return pg
-    .queryP_readOnly<Array<{ data: any; math_tick: any }>>(
+    .queryP_readOnly<{ data: any; math_tick: any }>(
       "select * from math_main where zid = ($1) and math_env = ($2);",
       [zid, Config.mathEnv]
     )

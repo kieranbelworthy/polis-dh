@@ -53,6 +53,13 @@ services:
     environment:
       - DATABASE_URL=${DATABASE_URL}
       - DATABASE_SSL=${DATABASE_SSL}
+      - MATH_ENV=${MATH_ENV:-prod}
+      # External management API (locked when key or owner is blank)
+      - EXTERNAL_API_KEY=${EXTERNAL_API_KEY:-}
+      - EXTERNAL_API_OWNER_USER_ID=${EXTERNAL_API_OWNER_USER_ID:-}
+      - EXTERNAL_API_OWNER_UID=${EXTERNAL_API_OWNER_UID:-}
+      # Keep server-side legacy reads aligned with the Delphi worker mode.
+      - DELPHI_DYNAMODB_ENABLED=${DELPHI_DYNAMODB_ENABLED:-}
       - AWS_LOG_GROUP_NAME=${AWS_LOG_GROUP_NAME}
     env_file:
       - ${SERVER_ENV_FILE:-.env}
@@ -111,7 +118,15 @@ services:
       - DELPHI_DEV_OR_PROD=${DELPHI_DEV_OR_PROD:-prod}
       # DynamoDB connection settings for local mode (will be overridden in prod)
       - DYNAMODB_ENDPOINT=${DYNAMODB_ENDPOINT}
+      # Legacy DynamoDB remains enabled by default for backward compatibility.
+      - DELPHI_DYNAMODB_ENABLED=${DELPHI_DYNAMODB_ENABLED:-}
       - POLL_INTERVAL=${POLL_INTERVAL:-2}
+      # Automatic PostgreSQL theme maintenance
+      - DELPHI_AUTO_REFRESH_ENABLED=${DELPHI_AUTO_REFRESH_ENABLED:-true}
+      - DELPHI_AUTO_REFRESH_DEBOUNCE_MS=${DELPHI_AUTO_REFRESH_DEBOUNCE_MS:-300000}
+      - DELPHI_AUTO_REFRESH_MAX_DELAY_MS=${DELPHI_AUTO_REFRESH_MAX_DELAY_MS:-3600000}
+      - DELPHI_AUTO_REFRESH_MIN_INTERVAL_MS=${DELPHI_AUTO_REFRESH_MIN_INTERVAL_MS:-1800000}
+      - DELPHI_AUTO_REFRESH_MIN_STATEMENTS=${DELPHI_AUTO_REFRESH_MIN_STATEMENTS:-5}
       # Ollama connection
       - OLLAMA_HOST=${OLLAMA_HOST}
       - OLLAMA_MODEL=${OLLAMA_MODEL}

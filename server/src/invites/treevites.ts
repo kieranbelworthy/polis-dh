@@ -241,7 +241,10 @@ export async function handle_POST_treevite_waves(req: any, res: any) {
     const derivedSize = parentSize * invitesPerUser + ownerInvites;
 
     // Insert wave
-    const insert = await pg.queryP(
+    const insert = await pg.queryP<{
+      id: number;
+      [key: string]: unknown;
+    }>(
       "insert into treevite_waves (zid, wave, parent_wave, invites_per_user, owner_invites, size) values (($1), ($2), ($3), ($4), ($5), ($6)) returning *;",
       [zid, nextWave, parentWave, invitesPerUser, ownerInvites, derivedSize]
     );
@@ -327,12 +330,11 @@ export async function handle_POST_treevite_waves(req: any, res: any) {
     }
 
     // Return the wave row and a summary of invites created
-    const countRows = await pg.queryP_readOnly(
+    const countRows = await pg.queryP_readOnly<{ total: number }>(
       "select count(*)::int as total from treevite_invites where wave_id = ($1);",
       [waveId]
     );
-    const totalInvites =
-      countRows && countRows[0] && (countRows[0] as any).total;
+    const totalInvites = countRows?.[0]?.total || 0;
 
     res.status(201).json({ ...waveRow, invites_created: totalInvites });
   } catch (err) {

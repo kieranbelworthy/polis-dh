@@ -2,4 +2,5 @@
 FROM postgres:17-alpine
 
 COPY init-db.sh /docker-entrypoint-initdb.d/init-db.sh
+COPY postgres/migrations/000020_create_delphi_theme_analysis.sql /opt/polis/migrations/000020_create_delphi_theme_analysis.sql
 RUN chmod +x /docker-entrypoint-initdb.d/init-db.sh

@@ -34,6 +34,11 @@ interface PostXidAllowListRequest extends RequestWithP {
   };
 }
 
+type XidAllowListRecord = {
+  pid: number | null;
+  xid: string;
+};
+
 /**
  * Fetches XID records for participants in a conversation (paginated).
  * @param zid - Conversation ID
@@ -98,17 +103,17 @@ async function getXidAllowListCount(
  * @param owner - Conversation owner UID
  * @param limit - Maximum number of records to return
  * @param offset - Number of records to skip
- * @returns Promise resolving to array of XidRecord objects {pid: number | null, xid: string}
+ * @returns Promise resolving to records shaped as {pid, xid}
  */
 async function getXidAllowListPaginated(
   zid: number,
   owner: number,
   limit: number,
   offset: number
-): Promise<XidRecord[]> {
+): Promise<XidAllowListRecord[]> {
   // Query to match allow list xids with participants (pids) if they're in use
   // Uses LEFT JOINs to ensure all allow list entries are returned, even if not in use
-  const rows = await pg.queryP_readOnly<{ pid: number | null; xid: string }>(
+  const rows = await pg.queryP_readOnly<XidAllowListRecord>(
     `SELECT 
       wl.xid,
       p.pid

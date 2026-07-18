@@ -27,6 +27,7 @@ import {
 import {
   getAutomaticDelphiAnalysisStateBestEffort,
   scheduleAutomaticDelphiAnalysisBestEffort,
+  scheduleAutomaticDelphiAnalysisForStatementWrite,
 } from "../utils/delphiJobs";
 import { getPca } from "../utils/pca";
 import type { PcaCacheItem } from "../utils/pca";
@@ -158,15 +159,11 @@ class CapturingResponse {
 const EXTERNAL_MATH_REFRESH_DEBOUNCE_MS = 30_000;
 
 function getExternalApiKey(): string | null {
-  return process.env.EXTERNAL_API_KEY || Config.externalApiKey || null;
+  return Config.externalApiKey || null;
 }
 
 function getExternalApiOwnerUserId(): number | null {
-  const raw =
-    process.env.EXTERNAL_API_OWNER_USER_ID ||
-    process.env.EXTERNAL_API_OWNER_UID ||
-    String(Config.externalApiOwnerUserId || "");
-  const ownerUserId = Number.parseInt(raw, 10);
+  const ownerUserId = Config.externalApiOwnerUserId;
   if (!Number.isInteger(ownerUserId) || ownerUserId <= 0) {
     return null;
   }
@@ -950,7 +947,11 @@ function getThemeStatementAssignments(
       continue;
     }
     const statement = statementsById.get(statementId);
-    if (!statement || (!includeInactive && !statement.active)) {
+    if (
+      !statement ||
+      statement.moderationStatus === -1 ||
+      (!includeInactive && !statement.active)
+    ) {
       continue;
     }
     assignments.push({
@@ -1772,16 +1773,27 @@ export async function handle_GET_external_insights_themes(
       20
     );
 
-    const [pca, topicRunsResult, clusterAssignments] = await Promise.all([
+    const [pca, topicRunsResult] = await Promise.all([
       getPca(conversation.conversationNumericId),
       loadDelphiTopicRuns(conversation.conversationNumericId),
-      getClusterAssignments(conversation.conversationNumericId),
     ]);
-    const [status, statements] = await Promise.all([
+    const selectedRun = topicRunsResult.runs[0] || null;
+    const [clusterAssignments, status, statements] = await Promise.all([
+      getClusterAssignments(
+        conversation.conversationNumericId,
+        false,
+        selectedRun?.storage === "dynamodb" && Config.dynamoDbConfigured,
+        selectedRun?.storage === "postgres",
+        selectedRun?.storage === "postgres" ? selectedRun.jobId : undefined
+      ),
       loadExternalInsightStatus(conversation, pca),
       buildExternalStatementInsights(conversation, pca),
     ]);
-    const selectedRun = topicRunsResult.runs[0] || null;
+    const existingAnalysisLifecycle =
+      await getAutomaticDelphiAnalysisStateBestEffort(
+        conversation.conversationNumericId,
+        status.statementCount
+      );
     const availableLayerIds = selectedRun
       ? getDelphiRunLayerIds(selectedRun)
       : [];
@@ -1813,7 +1825,9 @@ export async function handle_GET_external_insights_themes(
       }
     }
     const eligibleStatementCount = statements.filter(
-      (statement) => includeInactive || statement.active
+      (statement) =>
+        statement.moderationStatus !== -1 &&
+        (includeInactive || statement.active)
     ).length;
 
     const pcaData = getPcaData(pca);
@@ -1855,11 +1869,17 @@ export async function handle_GET_external_insights_themes(
     const analysisGeneratedAt = selectedRun?.createdAt
       ? Date.parse(selectedRun.createdAt)
       : Number.NaN;
+    const revisionStale =
+      selectedRun?.sourceRevision !== null &&
+      selectedRun?.sourceRevision !== undefined &&
+      existingAnalysisLifecycle.sourceRevision > selectedRun.sourceRevision;
     const themeAnalysisStale = selectedRun
-      ? Number.isFinite(analysisGeneratedAt) &&
-        status.lastStatementTimestamp !== null
+      ? revisionStale
+        ? true
+        : Number.isFinite(analysisGeneratedAt) &&
+          status.lastStatementTimestamp !== null
         ? analysisGeneratedAt < status.lastStatementTimestamp
-        : null
+        : false
       : null;
     const shouldRepairThemeAnalysis =
       topicRunsResult.available &&
@@ -1877,10 +1897,7 @@ export async function handle_GET_external_insights_themes(
             touchExisting: false,
           }
         )
-      : await getAutomaticDelphiAnalysisStateBestEffort(
-          conversation.conversationNumericId,
-          status.statementCount
-        );
+      : existingAnalysisLifecycle;
     const warnings: string[] = [];
 
     if (!topicRunsResult.available) {
@@ -1895,12 +1912,18 @@ export async function handle_GET_external_insights_themes(
     if (themeAnalysisStale) {
       warnings.push("theme_analysis_stale");
     }
-    if (["scheduled", "processing"].includes(analysisLifecycle.state)) {
+    if (
+      ["scheduling", "scheduled", "processing"].includes(
+        analysisLifecycle.state
+      )
+    ) {
       warnings.push("theme_analysis_updating");
     } else if (analysisLifecycle.state === "waiting_for_statements") {
       warnings.push("theme_analysis_waiting_for_statements");
     } else if (analysisLifecycle.state === "unavailable") {
       warnings.push("theme_refresh_unavailable");
+    } else if (analysisLifecycle.state === "disabled") {
+      warnings.push("theme_refresh_disabled");
     }
     if (!status.mathReady) {
       warnings.push("math_not_ready");
@@ -1924,6 +1947,9 @@ export async function handle_GET_external_insights_themes(
             jobId: selectedRun.jobId,
             generatedAt: selectedRun.createdAt,
             modelNames: selectedRun.modelNames,
+            labelMethod: selectedRun.labelMethod,
+            embeddingModel: selectedRun.embeddingModel,
+            sourceRevision: selectedRun.sourceRevision,
             isLatest: true,
             isStale: themeAnalysisStale,
           }
@@ -1932,6 +1958,9 @@ export async function handle_GET_external_insights_themes(
         jobId: run.jobId,
         generatedAt: run.createdAt,
         modelNames: run.modelNames,
+        labelMethod: run.labelMethod,
+        embeddingModel: run.embeddingModel,
+        sourceRevision: run.sourceRevision,
         themeCount: run.topics.length,
         layerIds: getDelphiRunLayerIds(run),
         isLatest: index === 0,
@@ -2221,6 +2250,13 @@ export async function handle_POST_external_comments(
       participant.conversationNumericId,
       "external_comment"
     );
+    const themeRefresh = await scheduleAutomaticDelphiAnalysisForStatementWrite(
+      participant.conversationNumericId,
+      {
+        reason: "external_comment",
+        touchExisting: true,
+      }
+    );
 
     res.status(200).json({
       conversationId,
@@ -2228,9 +2264,9 @@ export async function handle_POST_external_comments(
       participantId,
       statementId: capture.body?.tid,
       mathRefreshQueued,
-      themeRefresh: capture.body?.themeRefresh,
-      themeRefreshQueued: ["scheduled", "processing"].includes(
-        capture.body?.themeRefresh?.state
+      themeRefresh,
+      themeRefreshQueued: ["scheduling", "scheduled", "processing"].includes(
+        themeRefresh.state
       ),
     });
   } catch (err) {

@@ -65,7 +65,11 @@ const readPool: Pool = new Pool(readsPgConnection as unknown as PoolConfig);
 
 // Same syntax as pg.client.query, but uses connection pool
 // Also takes care of calling 'done'.
-function queryImpl(pool: Pool, queryString: string, ...args: any[]) {
+function queryImpl<T = any>(
+  pool: Pool,
+  queryString: string,
+  ...args: any[]
+): Promise<T[]> {
   // variable arity depending on whether or not query has params (default to [])
   let params: any[];
   let callback: ((arg0: any, arg1?: any) => void) | undefined;
@@ -82,7 +86,7 @@ function queryImpl(pool: Pool, queryString: string, ...args: any[]) {
   // Not sure whether we have to be this careful in calling release for these query results. There may or may
   // not have been a good reason why Mike did this. If just using pool.query works and doesn't exhibit scale
   // under load, might be worth stripping
-  return new Promise((resolve, reject) => {
+  return new Promise<T[]>((resolve, reject) => {
     pool.connect((err, client, release) => {
       if (err) {
         if (callback) callback(err);
@@ -111,15 +115,18 @@ function queryImpl(pool: Pool, queryString: string, ...args: any[]) {
 const pgPoolLevelRanks = ["info", "verbose"]; // TODO investigate
 const pgPoolLoggingLevel = -1; // -1 to get anything more important than info and verbose. // pgPoolLevelRanks.indexOf("info");
 
-function query(queryString: string, ...args: any[]) {
-  return queryImpl(readWritePool, queryString, ...args);
+function query<T = any>(queryString: string, ...args: any[]): Promise<T[]> {
+  return queryImpl<T>(readWritePool, queryString, ...args);
 }
 
-function query_readOnly(queryString: string, ...args: any[]) {
-  return queryImpl(readPool, queryString, ...args);
+function query_readOnly<T = any>(
+  queryString: string,
+  ...args: any[]
+): Promise<T[]> {
+  return queryImpl<T>(readPool, queryString, ...args);
 }
 
-function queryP_impl<T>(
+function queryP_impl<T = any>(
   pool: Pool,
   queryString?: string,
   params?: any[]
@@ -129,17 +136,20 @@ function queryP_impl<T>(
   }
 
   return (
-    queryImpl(pool, queryString, params || [], function () {}) as Promise<
+    queryImpl<T>(pool, queryString, params || [], function () {}) as Promise<
       T[] | undefined
     >
   ).then((rows) => rows || []);
 }
 
-function queryP<T>(queryString: string, ...args: any[]): Promise<T[]> {
+function queryP<T = any>(queryString: string, ...args: any[]): Promise<T[]> {
   return queryP_impl<T>(readWritePool, queryString, ...args);
 }
 
-function queryP_readOnly<T>(queryString: string, ...args: any[]): Promise<T[]> {
+function queryP_readOnly<T = any>(
+  queryString: string,
+  ...args: any[]
+): Promise<T[]> {
   return queryP_impl<T>(readPool, queryString, ...args);
 }
 

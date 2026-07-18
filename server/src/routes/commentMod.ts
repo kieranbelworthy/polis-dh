@@ -176,8 +176,8 @@ function handle_POST_stars(
   }
 ) {
   addStar(req.p.zid, req.p.tid, req.p.pid, req.p.starred)
-    .then(function (result: { rows: { created: any }[] }) {
-      const createdTimeMillis = safeTimestampToMillis(result.rows[0].created);
+    .then(function (rows: Array<{ created: number | string | Date }>) {
+      const createdTimeMillis = safeTimestampToMillis(rows[0].created);
       setTimeout(function () {
         updateConversationModifiedTime(req.p.zid, createdTimeMillis);
       }, 100);

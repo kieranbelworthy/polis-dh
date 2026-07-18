@@ -26,18 +26,26 @@ export type DelphiTopicRun = {
   jobId: string;
   modelNames: string[];
   createdAt: string | null;
+  sourceRevision: number | null;
+  labelMethod: string | null;
+  embeddingModel: string | null;
+  storage: "postgres" | "dynamodb";
   topics: DelphiTopic[];
 };
 
 export type DelphiTopicRunsResult = {
   available: boolean;
   runs: DelphiTopicRun[];
-  unavailableReason?: "table_not_found";
+  unavailableReason?:
+    | "table_not_found"
+    | "postgres_unavailable"
+    | "dynamodb_unavailable";
 };
 
 function createDynamoDocumentClient(): DynamoDBDocumentClient {
   const config: DynamoDBClientConfig = {
     region: Config.AWS_REGION || "us-east-1",
+    maxAttempts: 2,
   };
 
   if (Config.dynamoDbEndpoint) {
@@ -165,6 +173,10 @@ export function organizeDelphiTopicRuns(
         jobId,
         modelNames,
         createdAt: createdAt || null,
+        sourceRevision: null,
+        labelMethod: null,
+        embeddingModel: null,
+        storage: "dynamodb" as const,
         topics,
       };
     })
@@ -178,6 +190,86 @@ export function organizeDelphiTopicRuns(
 export async function loadDelphiTopicRuns(
   conversationNumericId: number
 ): Promise<DelphiTopicRunsResult> {
+  try {
+    const { default: pg } = await import("../db/pg-query");
+    const rows = await pg.queryP_readOnly<{
+      run_id: string;
+      source_revision: number | string;
+      generated_at: string | Date;
+      embedding_model: string;
+      label_method: string;
+      layer_id: number;
+      cluster_id: number;
+      topic_name: string;
+      model_name: string | null;
+    }>(
+      "SELECT r.run_id, r.source_revision, r.generated_at, " +
+        "r.embedding_model, r.label_method, t.layer_id, t.cluster_id, " +
+        "t.topic_name, t.model_name " +
+        "FROM delphi_theme_runs r " +
+        "JOIN delphi_themes t ON t.run_id = r.run_id " +
+        "WHERE r.zid = ($1) " +
+        "ORDER BY r.generated_at DESC, t.layer_id, t.cluster_id;",
+      [conversationNumericId]
+    );
+
+    if (rows.length > 0) {
+      const runs = new Map<string, DelphiTopicRun>();
+      for (const row of rows) {
+        const createdAt = new Date(row.generated_at).toISOString();
+        let run = runs.get(row.run_id);
+        if (!run) {
+          run = {
+            jobId: row.run_id,
+            modelNames: [row.model_name || row.embedding_model],
+            createdAt,
+            sourceRevision: Number(row.source_revision),
+            labelMethod: row.label_method,
+            embeddingModel: row.embedding_model,
+            storage: "postgres",
+            topics: [],
+          };
+          runs.set(row.run_id, run);
+        } else if (row.model_name && !run.modelNames.includes(row.model_name)) {
+          run.modelNames.push(row.model_name);
+          run.modelNames.sort();
+        }
+        run.topics.push({
+          jobId: row.run_id,
+          topicKey: `${row.run_id}#${row.layer_id}#${row.cluster_id}`,
+          layerId: Number(row.layer_id),
+          clusterId: Number(row.cluster_id),
+          topicName: row.topic_name,
+          modelName: row.model_name || row.embedding_model,
+          createdAt,
+        });
+      }
+      return { available: true, runs: Array.from(runs.values()) };
+    }
+  } catch (err) {
+    if (
+      !err ||
+      typeof err !== "object" ||
+      !("code" in err) ||
+      (err as { code?: string }).code !== "42P01"
+    ) {
+      return {
+        available: false,
+        runs: [],
+        unavailableReason: "postgres_unavailable",
+      };
+    }
+  }
+
+  // Preserve existing Delphi results during rollout and in standard Docker or
+  // AWS deployments. PostgreSQL-only platforms disable this explicitly.
+  if (!Config.dynamoDbConfigured) {
+    return {
+      available: true,
+      runs: [],
+    };
+  }
+
   const docClient = createDynamoDocumentClient();
   const items: Array<Record<string, unknown>> = [];
   let exclusiveStartKey: Record<string, unknown> | undefined;
@@ -216,6 +308,10 @@ export async function loadDelphiTopicRuns(
         unavailableReason: "table_not_found",
       };
     }
-    throw err;
+    return {
+      available: false,
+      runs: [],
+      unavailableReason: "dynamodb_unavailable",
+    };
   }
 }

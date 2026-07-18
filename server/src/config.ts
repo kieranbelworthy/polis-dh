@@ -1,6 +1,7 @@
 /* eslint-disable no-restricted-properties */
 import fs from "node:fs";
 import isTrue from "boolean";
+import { enabledUnlessExplicitlyDisabled } from "./utils/featureFlags";
 
 const devHostname: string = process.env.API_DEV_HOSTNAME || "localhost:5000";
 const devMode: boolean = isTrue(process.env.DEV_MODE);
@@ -12,6 +13,12 @@ const serverPort: number = parseInt(
 );
 const shouldUseTranslationAPI: boolean = isTrue(
   process.env.SHOULD_USE_TRANSLATION_API
+);
+const dynamoDbConfigured = enabledUnlessExplicitlyDisabled(
+  process.env.DELPHI_DYNAMODB_ENABLED
+);
+const delphiAutoRefreshEnabled = enabledUnlessExplicitlyDisabled(
+  process.env.DELPHI_AUTO_REFRESH_ENABLED
 );
 
 import("source-map-support").then((sourceMapSupport) => {
@@ -101,9 +108,7 @@ export default {
     process.env.DELPHI_AUTO_REFRESH_DEBOUNCE_MS || "300000",
     10
   ),
-  delphiAutoRefreshEnabled: isTrueOrBlank(
-    process.env.DELPHI_AUTO_REFRESH_ENABLED
-  ),
+  delphiAutoRefreshEnabled,
   delphiAutoRefreshMaxDelayMs: parseInt(
     process.env.DELPHI_AUTO_REFRESH_MAX_DELAY_MS || "3600000",
     10
@@ -116,6 +121,7 @@ export default {
     process.env.DELPHI_AUTO_REFRESH_MIN_STATEMENTS || "5",
     10
   ),
+  dynamoDbConfigured,
   dynamoDbEndpoint: process.env.DYNAMODB_ENDPOINT || null,
   emailTransportTypes: process.env.EMAIL_TRANSPORT_TYPES || null,
   externalApiKey: process.env.EXTERNAL_API_KEY || null,

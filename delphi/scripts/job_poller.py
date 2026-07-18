@@ -498,10 +498,18 @@ class JobProcessor:
             pending_jobs = [
                 job for job in execute_paginated_query('PENDING', due_before)
                 if _job_is_due(job, now)
+                and not (
+                    job.get('auto_managed') is True
+                    and job.get('refresh_kind') == 'themes'
+                )
             ]
             awaiting_jobs = [
                 job for job in execute_paginated_query('AWAITING_RECHECK', due_before)
                 if _job_is_due(job, now)
+                and not (
+                    job.get('auto_managed') is True
+                    and job.get('refresh_kind') == 'themes'
+                )
             ]
             
             actionable_jobs = pending_jobs + awaiting_jobs
@@ -510,6 +518,11 @@ class JobProcessor:
             processing_jobs = execute_paginated_query('PROCESSING')
             now_iso = now.isoformat()
             for job in processing_jobs:
+                if (
+                    job.get('auto_managed') is True
+                    and job.get('refresh_kind') == 'themes'
+                ):
+                    continue
                 if job.get('lock_expires_at', 'z') < now_iso:
                     logger.warning(f"Found zombie job {job['job_id']} with expired lock. Re-queueing.")
                     actionable_jobs.append(job)

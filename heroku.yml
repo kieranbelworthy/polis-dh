@@ -1,14 +1,27 @@
 build:
+  config:
+    USE_CPU_TORCH: "true"
   docker:
     # web server container
     web: server/Dockerfile
     # math worker container
     worker: math/Dockerfile
-    # build and release static assets (js, index.html, etc)
-    #release: Dockerfile
-#release:
-  #image: release
-  #command:
-    #- ./bin/deploy-static-assets.clj --bucket $STATIC_ASSET_DEPLOY_BUCKET
-
-
+    # self-managed PostgreSQL theme analysis worker
+    delphi: delphi/Dockerfile
+release:
+  image: web
+  command:
+    - node bin/run-theme-migration.js
+run:
+  web:
+    image: web
+    command:
+      - env DELPHI_DYNAMODB_ENABLED=false npm run serve
+  worker:
+    image: worker
+    command:
+      - ./bin/run
+  delphi:
+    image: delphi
+    command:
+      - python scripts/start_workers.py --postgres-only

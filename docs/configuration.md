@@ -1,6 +1,6 @@
 # Polis configuration
 
-Currently all of the configurable values are handled by environment variables. These are listed in the `env.example` file,
+Currently all of the configurable values are handled by environment variables. These are listed in the `example.env` file,
 which you should copy to `.env` and modify as needed.
 
 </br>
@@ -60,6 +60,12 @@ If you are deploying to a custom domain (not `pol.is`) then you need to update b
 - **`SERVER_ENV_FILE`** The name of an environment file to be passed into the API Server container by docker compose. Defaults to `.env` if left blank. Used especially for building a `test` version of the project for end-to-end testing.
 - **`SERVER_LOG_LEVEL`** Used by Winston.js in the API server to determine how much logging to output. Reasonable values are `debug`, `info`, `warn`, and `error`. Defaults to `warn`.
 
+### External management API
+
+- **`EXTERNAL_API_KEY`** Long random bearer token used by your backend. Requests remain locked when this or the owner ID is unset.
+- **`EXTERNAL_API_OWNER_USER_ID`** Existing Pol.is user ID which owns conversations created by the external API. **`EXTERNAL_API_OWNER_UID`** is accepted as an alias.
+- The API routes, PostgreSQL theme queue, and theme results are platform-neutral. Docker reads these values from the normal server environment file. Heroku uses the same variables as config vars.
+
 ### Database
 
 - **`READ_ONLY_DATABASE_URL`** (optional) Database replica for reads.
@@ -79,7 +85,15 @@ If you are deploying to a custom domain (not `pol.is`) then you need to update b
 
 #### DynamoDB
 
-- **`DYNAMODB_ENDPOINT`** (optional) DynamoDB endpoint. If not set, the default AWS SDK endpoint will be used.
+- **`DYNAMODB_ENDPOINT`** (optional) Local endpoint for legacy Delphi features. Setting it also selects the existing local MinIO and Ollama preparation path. It is not required for automatic themes.
+- **`DELPHI_DYNAMODB_ENABLED`** (optional) Explicit legacy-service override shared by the API server and Delphi container. Standard Docker defaults to `true` for backward compatibility with local and remote AWS deployments. Set it to `false` for a PostgreSQL-themes-only standard Docker deployment. Heroku sets this only in its process command and therefore requires no new config variable.
+
+#### Automatic themes
+
+- Automatic theme analysis uses `DATABASE_URL` and is enabled by default.
+- Jobs are registered by the external management API; ordinary Pol.is conversations are not automatically scanned or enrolled.
+- **`DELPHI_AUTO_REFRESH_ENABLED`** can disable it explicitly.
+- **`DELPHI_AUTO_REFRESH_DEBOUNCE_MS`**, **`DELPHI_AUTO_REFRESH_MAX_DELAY_MS`**, **`DELPHI_AUTO_REFRESH_MIN_INTERVAL_MS`**, and **`DELPHI_AUTO_REFRESH_MIN_STATEMENTS`** optionally tune its scheduling policy.
 
 ### Docker Concerns
 

@@ -20,13 +20,49 @@ That user must already exist in the Pol.is database.
 
 `EXTERNAL_API_OWNER_UID` also works as an alias.
 
-`MATH_ENV` must be the same for the web dyno and the worker dyno. Usually use `prod` on Heroku.
+`MATH_ENV` must be the same for the API server and math worker. Usually use
+`prod` in a production Docker or Heroku deployment.
 
 Every request must send this header:
 
 ```http
 Authorization: Bearer make-this-a-long-random-secret
 ```
+
+### Standard Docker deployment
+
+The external API uses the normal `server`, `math`, `delphi`, and PostgreSQL
+containers. It does not contain a Heroku dependency. Put the API key and owner
+ID in the root `.env` file and start the normal stack:
+
+```bash
+cp example.env .env
+# Set EXTERNAL_API_KEY and EXTERNAL_API_OWNER_USER_ID in .env first.
+docker compose --profile postgres --profile local-services up --build
+```
+
+If this Pol.is instance is used only as a PostgreSQL-backed insight service,
+legacy DynamoDB, MinIO, and Ollama can be omitted:
+
+```bash
+DELPHI_DYNAMODB_ENABLED=false \
+  docker compose --profile postgres up --build
+```
+
+A fresh PostgreSQL volume applies the theme schema automatically, including
+when initialized from `prodclone.dump`. When upgrading an existing database
+volume, apply migration `000020` once before starting the updated server and
+Delphi containers:
+
+```bash
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+  -f server/postgres/migrations/000020_create_delphi_theme_analysis.sql
+```
+
+The same API endpoints and response shapes are used in Docker and Heroku.
+Only process startup differs: `heroku.yml` selects PostgreSQL-only operation,
+while standard Docker preserves the existing legacy services unless they are
+explicitly disabled.
 
 In the examples below:
 
@@ -146,9 +182,10 @@ Response:
 Save `statementId` if you want to link your comment to the Pol.is statement.
 
 Pol.is automatically queues background math and theme maintenance after the
-comment is saved. Before the minimum theme corpus is reached,
-`themeRefresh.state` is `waiting_for_statements` and
-`themeRefreshQueued` is `false`.
+comment is saved. Theme dirtiness is recorded transactionally in PostgreSQL;
+it does not depend on a remote queue being responsive. Before the minimum
+theme corpus is reached, `themeRefresh.state` is
+`waiting_for_statements` and `themeRefreshQueued` is `false`.
 
 You can also add a vote from the comment author at the same time:
 
@@ -580,16 +617,21 @@ Delphi analysis pipeline. They are different from the participant opinion
 groups returned by the group insights endpoint.
 
 Theme generation is self-managed by Pol.is. Clients do not create or poll
-Delphi jobs. Once a conversation has at least five statements, statement
-creates and moderation changes mark its theme analysis dirty. Pol.is waits for
-a five-minute quiet period, coalesces changes into one job per conversation,
-limits full theme runs to one every 30 minutes, and caps postponement at one
-hour by default so continuously active conversations cannot starve. A change
-that arrives during a run requests one delayed successor. Votes do not rerun
-the semantic clustering: the response and group aggregates in this endpoint
-are computed from current vote data when requested.
+Delphi jobs. Once an external-API-managed conversation has at least five
+statements, statement creates and moderation changes mark its theme analysis
+dirty. Ordinary Pol.is conversations are not automatically enrolled in this
+workload. Pol.is waits for a five-minute quiet period, coalesces changes into
+one job per managed conversation, limits full theme runs to one every 30
+minutes, and caps postponement at one hour by default so continuously active
+conversations cannot starve. A change that arrives during a run requests one
+delayed successor. Votes do not rerun the semantic clustering: the response and
+group aggregates in this endpoint are computed from current vote data when
+requested.
 
-The defaults can be tuned by the deployment operator with
+Automatic refresh is backed by the same PostgreSQL database as Pol.is and is
+enabled by default. It does not require DynamoDB, S3, MinIO, Ollama, or an
+external model API. Operators can disable it with
+`DELPHI_AUTO_REFRESH_ENABLED=false`. The defaults can be tuned with
 `DELPHI_AUTO_REFRESH_DEBOUNCE_MS`,
 `DELPHI_AUTO_REFRESH_MAX_DELAY_MS`,
 `DELPHI_AUTO_REFRESH_MIN_INTERVAL_MS`, and
@@ -627,10 +669,11 @@ Defaults to `false`.
 : Number of representative and highlighted statements per list, from 1 to 20.
 Defaults to 5.
 
-The endpoint uses the latest topic run because the current Delphi assignment
-table is not versioned by job. `availableRuns` exposes older run metadata for
-audit and display purposes, but response statistics are only joined to the
-latest run.
+The endpoint uses the latest atomically published topic run. Assignments are
+versioned with their run, so a dashboard never combines topics from one run
+with assignments from another. `availableRuns` exposes older run metadata for
+audit and display purposes, while response statistics use the latest run. The
+worker retains the ten most recent successful runs per conversation by default.
 
 Example response:
 
@@ -650,7 +693,7 @@ Example response:
     "enabled": true,
     "jobId": "auto-theme-refresh-123",
     "state": "completed",
-    "status": "COMPLETED",
+    "status": "completed",
     "statementCount": 42,
     "minimumStatementCount": 5,
     "dirtyAt": null,
@@ -660,6 +703,8 @@ Example response:
     "completedAt": "2026-07-17T02:30:00.000Z",
     "updatedAt": "2026-07-17T02:30:00.000Z",
     "rerunRequested": false,
+    "sourceRevision": 12,
+    "completedRevision": 12,
     "changed": false
   },
   "readiness": {
@@ -670,7 +715,10 @@ Example response:
   "analysis": {
     "jobId": "32b8d2e3-97c2-4bcb-a082-99b88163a3fc",
     "generatedAt": "2026-07-17T02:30:00.000Z",
-    "modelNames": ["claude-sonnet"],
+    "modelNames": ["tfidf-keywords-v1"],
+    "labelMethod": "tfidf-keywords-v1",
+    "embeddingModel": "all-MiniLM-L6-v2",
+    "sourceRevision": 12,
     "isLatest": true,
     "isStale": false
   },
@@ -678,7 +726,10 @@ Example response:
     {
       "jobId": "32b8d2e3-97c2-4bcb-a082-99b88163a3fc",
       "generatedAt": "2026-07-17T02:30:00.000Z",
-      "modelNames": ["claude-sonnet"],
+      "modelNames": ["tfidf-keywords-v1"],
+      "labelMethod": "tfidf-keywords-v1",
+      "embeddingModel": "all-MiniLM-L6-v2",
+      "sourceRevision": 12,
       "themeCount": 18,
       "layerIds": [0, 1, 2],
       "isLatest": true
@@ -773,11 +824,11 @@ Example response:
 ```
 
 `analysisLifecycle.state` is one of `waiting_for_statements`, `idle`,
-`scheduled`, `processing`, `completed`, `failed`, `disabled`, or `unavailable`.
-For `scheduled`, `notBefore` is the earliest worker start time. The endpoint
-also performs read-repair for older conversations: if themes are missing or
-stale and no automatic job exists, reading this resource schedules the one
-managed job without extending work that is already pending.
+`scheduling`, `scheduled`, `processing`, `completed`, `failed`, `disabled`, or
+`unavailable`. For `scheduled`, `notBefore` is the earliest worker start time.
+The endpoint also performs read-repair for older conversations: if themes are
+missing or stale and no automatic job exists, reading this resource schedules
+the one managed job without extending work that is already pending.
 
 `respondentCount`
 : Unique participants who voted on at least one statement in the theme.
@@ -828,8 +879,9 @@ Delphi run. Vote aggregates remain live; Pol.is queues the managed refresh and
 reports its progress in `analysisLifecycle`.
 
 Automatic math refreshes and automatic Delphi refreshes are separate internal
-workers. A Delphi worker and its DynamoDB tables must be configured, but API
-clients do not need to order theme creation or call a refresh endpoint.
+workers. The Delphi process needs PostgreSQL and sufficient memory for its
+embedding model, but API clients do not order theme creation or call a refresh
+endpoint.
 
 ## Read Overview
 
