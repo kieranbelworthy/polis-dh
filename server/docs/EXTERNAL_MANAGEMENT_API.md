@@ -609,6 +609,32 @@ curl "$POLIS_URL/api/v3/external/conversations/abc123def/insights/groups?include
   -H "Authorization: Bearer $API_KEY"
 ```
 
+## Read Opinion Graph Data
+
+Use this endpoint to render a participant scatterplot:
+
+```bash
+curl "$POLIS_URL/api/v3/external/conversations/abc123def/insights/graph" \\
+  -H "Authorization: Bearer $API_KEY"
+```
+
+The response contains conversation-local PCA coordinates. `points` is empty
+until math is ready; `mathTick` identifies the calculation revision. Axes are
+not comparable across conversations or revisions.
+
+```json
+{
+  "conversationId": "abc123def",
+  "mathReady": true,
+  "mathTick": 42,
+  "dimensions": ["x", "y"],
+  "coordinateSystem": "polis-pca",
+  "points": [
+    {"externalParticipantId": "participant-1", "x": -0.42, "y": 0.18, "groupId": "0"}
+  ]
+}
+```
+
 ## Read Theme Insights
 
 Use this endpoint to power a dashboard of the themes that emerged from the

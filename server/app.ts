@@ -146,6 +146,7 @@ import {
 import {
   externalServiceAuth,
   handle_GET_external_insights_groups,
+  handle_GET_external_insights_graph,
   handle_GET_external_insights_overview,
   handle_GET_external_insights_statements,
   handle_GET_external_insights_status,
@@ -385,6 +386,11 @@ helpersInitialized.then(
     app.get(
       "/api/v3/external/conversations/:conversationId/insights/groups",
       handle_GET_external_insights_groups
+    );
+
+    app.get(
+      "/api/v3/external/conversations/:conversationId/insights/graph",
+      handle_GET_external_insights_graph
     );
 
     app.get(

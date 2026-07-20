@@ -458,6 +458,22 @@ describe("External Management API", () => {
     expect(response.body.groups).toEqual([]);
   });
 
+  test("returns an empty graph shape before math has run", async () => {
+    const conversationId = await createExternalConversation();
+    const response = await externalGet(
+      `/api/v3/external/conversations/${conversationId}/insights/graph`
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      conversationId,
+      mathReady: false,
+      dimensions: ["x", "y"],
+      coordinateSystem: "polis-pca",
+      points: [],
+    });
+  });
+
   test("returns a dashboard-ready empty theme response before Delphi has run", async () => {
     const conversationId = await createExternalConversation();
 

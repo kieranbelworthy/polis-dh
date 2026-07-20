@@ -684,6 +684,37 @@ function getPcaMathMeta(pca?: PcaCacheItem) {
   };
 }
 
+async function buildExternalOpinionGraph(conversation: ExternalConversation, pca?: PcaCacheItem) {
+  const data = getPcaData(pca);
+  const pcaResult = data?.pca;
+  const inConv = Array.isArray(data?.["in-conv"]) ? data["in-conv"] : [];
+  const comps = Array.isArray(pcaResult?.comps) ? pcaResult.comps : [];
+  const x = Array.isArray(comps[0]) ? comps[0] : [];
+  const y = Array.isArray(comps[1]) ? comps[1] : [];
+  const groupByPid = new Map<number, string>();
+  const baseClusters = data?.["base-clusters"];
+  const baseIds = Array.isArray(baseClusters?.id) ? baseClusters.id : [];
+  const baseMembers = Array.isArray(baseClusters?.members)
+    ? baseClusters.members
+    : [];
+  for (const group of getPcaGroupClusters(data)) {
+    for (const baseId of group.members) {
+      const index = baseIds.findIndex((id: any) => toNumber(id) === baseId);
+      for (const pid of Array.isArray(baseMembers[index]) ? baseMembers[index] : []) {
+        groupByPid.set(toNumber(pid), String(group.id));
+      }
+    }
+  }
+  const externalIds = await loadParticipantExternalIdMap(conversation);
+  const points = inConv.map((pid: any, index: number) => {
+    const participantId = toNumber(pid, Number.NaN);
+    const point = { x: toNumber(x[index], Number.NaN), y: toNumber(y[index], Number.NaN) };
+    if (!Number.isFinite(participantId) || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
+    return { externalParticipantId: externalIds.get(participantId) || null, ...point, groupId: groupByPid.get(participantId) || null };
+  }).filter((point) => point !== null);
+  return { dimensions: ["x", "y"], coordinateSystem: "polis-pca", points };
+}
+
 function buildNumberByTidMap(
   tids?: unknown[],
   values?: unknown[]
@@ -1736,6 +1767,18 @@ export async function handle_GET_external_insights_groups(
     });
   } catch (err) {
     sendExternalError(res, err, "polis_err_external_insights_groups");
+  }
+}
+
+export async function handle_GET_external_insights_graph(req: ExternalRequest, res: Response) {
+  try {
+    const conversationId = getPathConversationId(req);
+    const conversation = await resolveOwnedExternalConversation(req, conversationId);
+    const pca = await getPca(conversation.conversationNumericId);
+    const graph = await buildExternalOpinionGraph(conversation, pca);
+    res.status(200).json({ conversationId: conversation.conversationId, ...getPcaMathMeta(pca), ...graph });
+  } catch (err) {
+    sendExternalError(res, err, "polis_err_external_insights_graph");
   }
 }
 
