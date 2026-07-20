@@ -29,6 +29,25 @@ def automatic_themes_enabled() -> bool:
     return str(configured).strip().lower() not in {"0", "false", "no", "off"}
 
 
+def configure_runtime_resources() -> None:
+    """Bound native-library thread pools before either child process starts."""
+    try:
+        thread_count = max(1, int(os.environ.get("DELPHI_NUM_THREADS", "1")))
+    except ValueError:
+        thread_count = 1
+        logger.warning("Invalid DELPHI_NUM_THREADS; using 1")
+    os.environ["DELPHI_NUM_THREADS"] = str(thread_count)
+    defaults = {
+        "OMP_NUM_THREADS": str(thread_count),
+        "OPENBLAS_NUM_THREADS": str(thread_count),
+        "MKL_NUM_THREADS": str(thread_count),
+        "NUMEXPR_NUM_THREADS": str(thread_count),
+        "TOKENIZERS_PARALLELISM": "false",
+    }
+    for name, value in defaults.items():
+        os.environ[name] = value
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run Delphi background workers")
     parser.add_argument(
@@ -111,6 +130,7 @@ def request_stop(_signum=None, _frame=None) -> None:
 
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
+    configure_runtime_resources()
     signal.signal(signal.SIGINT, request_stop)
     signal.signal(signal.SIGTERM, request_stop)
 

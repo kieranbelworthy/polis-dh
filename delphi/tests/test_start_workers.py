@@ -5,6 +5,7 @@ from unittest.mock import call, patch
 from scripts import start_workers
 from scripts.start_workers import (
     automatic_themes_enabled,
+    configure_runtime_resources,
     legacy_dynamodb_enabled,
     legacy_worker_command,
     parse_args,
@@ -51,6 +52,22 @@ def test_standard_aws_deployment_preserves_legacy_worker_and_ddtrace():
             "--interval=7",
             "--region=us-east-1",
         ]
+
+
+def test_launcher_bounds_native_thread_pools_before_children_start():
+    names = [
+        "DELPHI_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "TOKENIZERS_PARALLELISM",
+    ]
+    with patch.dict(os.environ, {name: "" for name in names}, clear=False):
+        configure_runtime_resources()
+        assert os.environ["DELPHI_NUM_THREADS"] == "1"
+        assert all(os.environ[name] == "1" for name in names[1:5])
+        assert os.environ["TOKENIZERS_PARALLELISM"] == "false"
 
 
 def test_standard_local_compose_preserves_legacy_setup():

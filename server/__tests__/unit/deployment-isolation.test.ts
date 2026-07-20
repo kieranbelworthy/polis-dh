@@ -17,6 +17,7 @@ describe("external management API deployment isolation", () => {
     expect(manifest).toContain(
       "python scripts/start_workers.py --postgres-only"
     );
+    expect(manifest).toContain("DELPHI_THEME_EMBEDDING_MODE=tfidf");
   });
 
   test("the standard Delphi image retains its portable default command", () => {
@@ -40,6 +41,9 @@ describe("external management API deployment isolation", () => {
     expect(dockerfile).not.toMatch(/^\s*RUN\s+--mount=/m);
     expect(composeManifest).toMatch(
       /delphi:\s+image:[^\n]+\s+build:\s+context: \.\/delphi\s+target: final/
+    );
+    expect(composeManifest).toContain(
+      "DELPHI_THEME_EMBEDDING_MODE=${DELPHI_THEME_EMBEDDING_MODE:-embedding}"
     );
     expect(makefile).toContain("docker build --target final");
     expect(makefile).toContain("docker build --target final --no-cache");

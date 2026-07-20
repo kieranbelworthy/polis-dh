@@ -15,14 +15,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
-import evoc
-import numpy as np
 import psycopg2
 from psycopg2.extras import RealDictCursor, execute_values
-from sentence_transformers import SentenceTransformer
-from sklearn.cluster import AgglomerativeClustering, KMeans
-from sklearn.feature_extraction.text import TfidfVectorizer
-from umap import UMAP
 
 logging.basicConfig(
     level=os.environ.get("DELPHI_LOG_LEVEL", os.environ.get("LOG_LEVEL", "INFO")),
@@ -31,8 +25,27 @@ logging.basicConfig(
 logger = logging.getLogger("postgres_theme_worker")
 
 running = True
-_embedding_model: SentenceTransformer | None = None
+_embedding_model: Any = None
 _embedding_model_path: str | None = None
+
+
+def configure_runtime_resources() -> None:
+    """Keep native numerical libraries from multiplying worker memory."""
+    try:
+        thread_count = max(1, int(os.environ.get("DELPHI_NUM_THREADS", "1")))
+    except ValueError:
+        thread_count = 1
+        logger.warning("Invalid DELPHI_NUM_THREADS; using 1")
+    os.environ["DELPHI_NUM_THREADS"] = str(thread_count)
+    defaults = {
+        "OMP_NUM_THREADS": str(thread_count),
+        "OPENBLAS_NUM_THREADS": str(thread_count),
+        "MKL_NUM_THREADS": str(thread_count),
+        "NUMEXPR_NUM_THREADS": str(thread_count),
+        "TOKENIZERS_PARALLELISM": "false",
+    }
+    for name, value in defaults.items():
+        os.environ[name] = value
 
 
 def _non_negative_int(name: str, default: int) -> int:
@@ -238,7 +251,10 @@ class LeaseHeartbeat:
                 logger.exception("Could not renew lease for conversation %s", self.zid)
 
 
-def _fallback_layers(vectors: np.ndarray) -> list[np.ndarray]:
+def _fallback_layers(vectors: Any) -> list[Any]:
+    import numpy as np
+    from sklearn.cluster import AgglomerativeClustering, KMeans
+
     count = len(vectors)
     fine_clusters = min(count, max(2, int(round(math.sqrt(count)))))
     fine = KMeans(n_clusters=fine_clusters, random_state=42, n_init=10).fit_predict(vectors)
@@ -250,10 +266,75 @@ def _fallback_layers(vectors: np.ndarray) -> list[np.ndarray]:
     return layers
 
 
-def cluster_comments(comments: list[dict[str, Any]]):
+def _theme_mode(statement_count: int) -> str:
+    # Preserve the historical standard-Docker behavior. Heroku explicitly
+    # selects the memory-safe TF-IDF mode in heroku.yml.
+    configured = os.environ.get("DELPHI_THEME_EMBEDDING_MODE", "embedding")
+    mode = str(configured).strip().lower()
+    if mode not in {"tfidf", "embedding", "auto"}:
+        logger.warning(
+            "Invalid DELPHI_THEME_EMBEDDING_MODE=%r; using embedding", configured
+        )
+        return "embedding"
+    if mode == "auto":
+        threshold = _non_negative_int(
+            "DELPHI_THEME_EMBEDDING_MAX_STATEMENTS", 128
+        )
+        return "tfidf" if statement_count <= threshold else "embedding"
+    return mode
+
+
+def _tfidf_theme_projection(texts: list[str]):
+    """Build bounded local features without importing the torch stack."""
+    import numpy as np
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    max_features = _non_negative_int("DELPHI_THEME_TFIDF_MAX_FEATURES", 2048)
+    vectorizer = TfidfVectorizer(
+        max_features=max(32, max_features),
+        stop_words="english",
+        ngram_range=(1, 2),
+    )
+    try:
+        matrix = vectorizer.fit_transform(texts)
+    except ValueError:
+        matrix = None
+    if matrix is None or matrix.shape[1] == 0:
+        vectors = np.ones((len(texts), 1), dtype=np.float32)
+    else:
+        components = min(
+            max(2, _non_negative_int("DELPHI_THEME_TFIDF_COMPONENTS", 32)),
+            max(1, matrix.shape[0] - 1),
+            max(1, matrix.shape[1] - 1),
+        )
+        # Keep the working representation bounded even when a conversation has
+        # many comments or distinct terms. TruncatedSVD consumes the sparse
+        # matrix and emits only a small dense feature matrix for clustering.
+        vectors = TruncatedSVD(
+            n_components=components,
+            random_state=42,
+        ).fit_transform(matrix).astype(np.float32, copy=False)
+    if len(vectors) <= 1:
+        projection = np.zeros((len(vectors), 2), dtype=np.float32)
+    else:
+        centered = vectors - vectors.mean(axis=0, keepdims=True)
+        left, singular, _ = np.linalg.svd(centered, full_matrices=False)
+        components = min(2, left.shape[1])
+        projection = np.zeros((len(vectors), 2), dtype=np.float32)
+        projection[:, :components] = (
+            left[:, :components] * singular[:components]
+        ).astype(np.float32, copy=False)
+    return vectors, projection
+
+
+def _cluster_with_embeddings(texts: list[str]):
     global _embedding_model, _embedding_model_path
-    texts = [str(comment["txt"]).strip() for comment in comments]
-    tids = [int(comment["tid"]) for comment in comments]
+    import numpy as np
+    import evoc
+    from sentence_transformers import SentenceTransformer
+    from umap import UMAP
+
     configured_model = os.environ.get("SENTENCE_TRANSFORMER_MODEL")
     bundled_model = "/opt/models/all-MiniLM-L6-v2"
     model_path = configured_model or (
@@ -264,7 +345,25 @@ def cluster_comments(comments: list[dict[str, Any]]):
     if _embedding_model is None or _embedding_model_path != model_path:
         _embedding_model = SentenceTransformer(model_path)
         _embedding_model_path = model_path
-    vectors = np.asarray(_embedding_model.encode(texts, show_progress_bar=False))
+        try:
+            import torch
+
+            torch.set_num_threads(1)
+            torch.set_num_interop_threads(1)
+        except (ImportError, RuntimeError):
+            pass
+    batch_size = max(
+        1, _non_negative_int("DELPHI_THEME_EMBEDDING_BATCH_SIZE", 16)
+    )
+    vectors = np.asarray(
+        _embedding_model.encode(
+            texts,
+            batch_size=batch_size,
+            show_progress_bar=False,
+            convert_to_numpy=True,
+        ),
+        dtype=np.float32,
+    )
     neighbors = min(15, max(2, len(texts) - 1))
     document_map = UMAP(
         n_components=2,
@@ -287,10 +386,38 @@ def cluster_comments(comments: list[dict[str, Any]]):
         logger.exception("EVōC clustering failed; using deterministic fallback")
         layers = _fallback_layers(vectors)
 
+    return vectors, np.asarray(document_map), layers, model_identity
+
+
+def cluster_comments(comments: list[dict[str, Any]]):
+    import numpy as np
+
+    texts = [str(comment["txt"]).strip() for comment in comments]
+    tids = [int(comment["tid"]) for comment in comments]
+    mode = _theme_mode(len(texts))
+    if mode == "tfidf":
+        logger.info(
+            "Using bounded TF-IDF theme clustering for %s statements",
+            len(texts),
+        )
+        vectors, document_map = _tfidf_theme_projection(texts)
+        layers = _fallback_layers(vectors)
+        model_identity = "tfidf-v1"
+    else:
+        logger.info(
+            "Using sentence-transformer theme clustering for %s statements",
+            len(texts),
+        )
+        vectors, document_map, layers, model_identity = _cluster_with_embeddings(
+            texts
+        )
     return texts, tids, vectors, np.asarray(document_map), layers, model_identity
 
 
 def keyword_labels(texts: list[str], layers: list[np.ndarray]):
+    import numpy as np
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
     vectorizer = TfidfVectorizer(
         max_features=2000,
         stop_words="english",
@@ -321,6 +448,8 @@ def keyword_labels(texts: list[str], layers: list[np.ndarray]):
 
 
 def build_results(comments: list[dict[str, Any]]):
+    import numpy as np
+
     texts, tids, _vectors, document_map, layers, model_name = cluster_comments(comments)
     labels = keyword_labels(texts, layers)
     themes = []
@@ -459,6 +588,7 @@ def fail_job(job, worker_id: str, policy: Policy, error: Exception) -> None:
 
 
 def run_worker() -> None:
+    configure_runtime_resources()
     policy = Policy.from_env()
     worker_id = f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     logger.info("Starting PostgreSQL theme worker %s with policy %s", worker_id, policy)

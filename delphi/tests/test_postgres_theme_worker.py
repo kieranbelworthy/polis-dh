@@ -3,7 +3,13 @@ from unittest.mock import patch
 
 import numpy as np
 
-from scripts.postgres_theme_worker import Policy, _fallback_layers, keyword_labels
+from scripts.postgres_theme_worker import (
+    Policy,
+    _fallback_layers,
+    _theme_mode,
+    configure_runtime_resources,
+    keyword_labels,
+)
 
 
 def test_default_policy_needs_no_new_environment_variables():
@@ -38,6 +44,49 @@ def test_automatic_themes_can_be_disabled_without_affecting_other_workers():
         policy = Policy.from_env()
 
     assert policy.enabled is False
+
+
+def test_standard_docker_theme_mode_preserves_embedding_default():
+    with patch.dict(os.environ, {}, clear=True):
+        assert _theme_mode(11) == "embedding"
+
+
+def test_tfidf_mode_is_available_for_constrained_workers():
+    with patch.dict(
+        os.environ,
+        {"DELPHI_THEME_EMBEDDING_MODE": "tfidf"},
+        clear=False,
+    ):
+        assert _theme_mode(11) == "tfidf"
+
+
+def test_auto_theme_mode_only_uses_embeddings_above_configured_threshold():
+    with patch.dict(
+        os.environ,
+        {
+            "DELPHI_THEME_EMBEDDING_MODE": "auto",
+            "DELPHI_THEME_EMBEDDING_MAX_STATEMENTS": "10",
+        },
+        clear=False,
+    ):
+        assert _theme_mode(10) == "tfidf"
+        assert _theme_mode(11) == "embedding"
+
+
+def test_runtime_resource_defaults_bound_native_thread_pools():
+    names = [
+        "DELPHI_NUM_THREADS",
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "TOKENIZERS_PARALLELISM",
+    ]
+    with patch.dict(os.environ, {name: "" for name in names}, clear=False):
+        configure_runtime_resources()
+        assert os.environ["DELPHI_NUM_THREADS"] == "1"
+        assert all(os.environ[name] == "1" for name in names[1:5])
+        assert os.environ["TOKENIZERS_PARALLELISM"] == "false"
 
 
 def test_keyword_labels_are_local_and_dashboard_friendly():

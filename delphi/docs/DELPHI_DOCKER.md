@@ -26,6 +26,14 @@ The following environment variables control the container's behavior:
   enabled by default for backward compatibility; set this to `false` for a
   PostgreSQL-themes-only standard Docker deployment.
 - `DELPHI_AUTO_REFRESH_ENABLED`: Enables PostgreSQL automatic themes (default: true)
+- `DELPHI_THEME_EMBEDDING_MODE`: `embedding` (standard Docker default), `auto`,
+  or `tfidf`. Heroku explicitly uses `tfidf`; use that mode on constrained
+  workers.
+- `DELPHI_THEME_TFIDF_MAX_FEATURES`: Sparse lexical feature cap (default: 2048)
+- `DELPHI_THEME_TFIDF_COMPONENTS`: Dense SVD component cap (default: 32)
+- `DELPHI_THEME_EMBEDDING_BATCH_SIZE`: Transformer batch size when embedding mode
+  is enabled (default: 16)
+- `DELPHI_NUM_THREADS`: Native numerical-library thread count (default: 1)
 - `POLL_INTERVAL`: Polling interval in seconds for the job poller (default: 2)
 - `LOG_LEVEL`: Logging level (default: INFO)
 - `DATABASE_URL`: PostgreSQL database URL for math pipeline
@@ -45,7 +53,9 @@ The Delphi container runs the following services:
 If the container exits, check that:
 
 1. `DATABASE_URL` is correct and the theme migration has run.
-2. The dyno or container has enough memory for sentence-transformers, UMAP, and EVōC.
+2. Standard Docker defaults to the historical embedding path and therefore
+   needs substantially more memory. Use `DELPHI_THEME_EMBEDDING_MODE=tfidf` on
+   constrained workers; Heroku already selects it.
 3. If legacy jobs are enabled, the DynamoDB endpoint or AWS credentials are correct.
 
 ## Maintaining State

@@ -94,6 +94,16 @@ If you are deploying to a custom domain (not `pol.is`) then you need to update b
 - Jobs are registered by the external management API; ordinary Pol.is conversations are not automatically scanned or enrolled.
 - **`DELPHI_AUTO_REFRESH_ENABLED`** can disable it explicitly.
 - **`DELPHI_AUTO_REFRESH_DEBOUNCE_MS`**, **`DELPHI_AUTO_REFRESH_MAX_DELAY_MS`**, **`DELPHI_AUTO_REFRESH_MIN_INTERVAL_MS`**, and **`DELPHI_AUTO_REFRESH_MIN_STATEMENTS`** optionally tune its scheduling policy.
+- **`DELPHI_THEME_EMBEDDING_MODE`** defaults to `embedding` for standard Docker,
+  preserving the historical SentenceTransformer/UMAP/EVōC path. Heroku
+  explicitly selects `tfidf` in `heroku.yml`. `auto` uses TF-IDF for smaller
+  conversations and embeddings only above `DELPHI_THEME_EMBEDDING_MAX_STATEMENTS`.
+- **`DELPHI_THEME_TFIDF_MAX_FEATURES`** and **`DELPHI_THEME_TFIDF_COMPONENTS`**
+  cap the sparse and dense working representations (defaults: 2048 and 32).
+- **`DELPHI_THEME_EMBEDDING_BATCH_SIZE`** limits transformer encoding batches
+  when embedding mode is enabled (default: 16).
+- **`DELPHI_NUM_THREADS`** controls native numerical-library threads (default: 1).
+  Increase it only when the worker has memory headroom.
 
 ### Docker Concerns
 
