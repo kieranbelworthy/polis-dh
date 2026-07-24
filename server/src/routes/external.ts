@@ -29,6 +29,7 @@ import {
   scheduleAutomaticDelphiAnalysisBestEffort,
   scheduleAutomaticDelphiAnalysisForStatementWrite,
 } from "../utils/delphiJobs";
+import { buildParticipantOpinionGraphPositions } from "../utils/externalOpinionGraph";
 import { getPca } from "../utils/pca";
 import type { PcaCacheItem } from "../utils/pca";
 import logger from "../utils/logger";
@@ -356,6 +357,16 @@ function getPathConversationId(req: ExternalRequest): string {
   ]);
 }
 
+function getPathStatementId(req: ExternalRequest): number {
+  return readRequiredIntInRange(
+    req.params || {},
+    "statementId",
+    0,
+    2147483647,
+    ["tid"]
+  );
+}
+
 function sendExternalError(
   res: Response,
   err: any,
@@ -492,14 +503,16 @@ async function registerExternalConversationId(
 
 async function resolveOwnedExternalConversation(
   req: ExternalRequest,
-  conversationId: string
+  conversationId: string,
+  usePrimary = false
 ): Promise<ExternalConversation> {
   const ownerUserId = req.p.external_api_owner_user_id || req.p.uid;
   if (!ownerUserId) {
     throw new ExternalApiError(401, "polis_err_external_api_auth");
   }
 
-  const rows = (await pg.queryP_readOnly(
+  const query = usePrimary ? pg.queryP : pg.queryP_readOnly;
+  const rows = (await query(
     "SELECT z.zid, z.zinvite, c.owner, c.topic " +
       "FROM zinvites z INNER JOIN conversations c ON c.zid = z.zid " +
       "WHERE z.zinvite = ($1) LIMIT 1;",
@@ -684,34 +697,20 @@ function getPcaMathMeta(pca?: PcaCacheItem) {
   };
 }
 
-async function buildExternalOpinionGraph(conversation: ExternalConversation, pca?: PcaCacheItem) {
+async function buildExternalOpinionGraph(
+  conversation: ExternalConversation,
+  pca?: PcaCacheItem
+) {
   const data = getPcaData(pca);
-  const pcaResult = data?.pca;
-  const inConv = Array.isArray(data?.["in-conv"]) ? data["in-conv"] : [];
-  const comps = Array.isArray(pcaResult?.comps) ? pcaResult.comps : [];
-  const x = Array.isArray(comps[0]) ? comps[0] : [];
-  const y = Array.isArray(comps[1]) ? comps[1] : [];
-  const groupByPid = new Map<number, string>();
-  const baseClusters = data?.["base-clusters"];
-  const baseIds = Array.isArray(baseClusters?.id) ? baseClusters.id : [];
-  const baseMembers = Array.isArray(baseClusters?.members)
-    ? baseClusters.members
-    : [];
-  for (const group of getPcaGroupClusters(data)) {
-    for (const baseId of group.members) {
-      const index = baseIds.findIndex((id: any) => toNumber(id) === baseId);
-      for (const pid of Array.isArray(baseMembers[index]) ? baseMembers[index] : []) {
-        groupByPid.set(toNumber(pid), String(group.id));
-      }
-    }
-  }
+  const positions = buildParticipantOpinionGraphPositions(
+    data,
+    getPcaGroupClusters(data)
+  );
   const externalIds = await loadParticipantExternalIdMap(conversation);
-  const points = inConv.map((pid: any, index: number) => {
-    const participantId = toNumber(pid, Number.NaN);
-    const point = { x: toNumber(x[index], Number.NaN), y: toNumber(y[index], Number.NaN) };
-    if (!Number.isFinite(participantId) || !Number.isFinite(point.x) || !Number.isFinite(point.y)) return null;
-    return { externalParticipantId: externalIds.get(participantId) || null, ...point, groupId: groupByPid.get(participantId) || null };
-  }).filter((point) => point !== null);
+  const points = positions.map(({ participantId, ...position }) => ({
+    externalParticipantId: externalIds.get(participantId) || null,
+    ...position,
+  }));
   return { dimensions: ["x", "y"], coordinateSystem: "polis-pca", points };
 }
 
@@ -2314,6 +2313,214 @@ export async function handle_POST_external_comments(
     });
   } catch (err) {
     sendExternalError(res, err, "polis_err_external_comment");
+  }
+}
+
+export async function handle_PUT_external_comments(
+  req: ExternalRequest,
+  res: Response
+) {
+  try {
+    const conversationId = getPathConversationId(req);
+    const statementId = getPathStatementId(req);
+    const body = readObject(req.body || {}, "body");
+    const text = readRequiredString(body, "text", 997, ["txt"]);
+    const conversation = await resolveOwnedExternalConversation(
+      req,
+      conversationId,
+      true
+    );
+
+    const client = await pg.connect();
+    let updatedComment: { txt: string; modified: number | string } | undefined;
+    let transactionOpen = false;
+
+    try {
+      await client.query("BEGIN");
+      transactionOpen = true;
+
+      const updated = await client.query<{
+        txt: string;
+        modified: number | string;
+      }>(
+        "UPDATE comments SET txt = $3, modified = now_as_millis() " +
+          "WHERE zid = $1 AND tid = $2 RETURNING txt, modified;",
+        [conversation.conversationNumericId, statementId, text]
+      );
+
+      if (updated.rows.length === 0) {
+        throw new ExternalApiError(404, "polis_err_external_comment_not_found");
+      }
+
+      // Existing translations describe the previous text and must not survive
+      // an edit.
+      await client.query(
+        "DELETE FROM comment_translations WHERE zid = $1 AND tid = $2;",
+        [conversation.conversationNumericId, statementId]
+      );
+
+      updatedComment = updated.rows[0];
+      await client.query("COMMIT");
+      transactionOpen = false;
+    } catch (err) {
+      if (transactionOpen) {
+        await client.query("ROLLBACK");
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    await updateConversationModifiedTime(conversation.conversationNumericId);
+    const mathRefreshQueued = await queueExternalMathRefreshBestEffort(
+      conversation.conversationNumericId,
+      "external_comment_edit"
+    );
+    const themeRefresh = await scheduleAutomaticDelphiAnalysisForStatementWrite(
+      conversation.conversationNumericId,
+      {
+        reason: "external_comment_edit",
+        touchExisting: true,
+      }
+    );
+
+    res.status(200).json({
+      conversationId,
+      statementId,
+      text: updatedComment?.txt || text,
+      modified: toNullableTimestamp(updatedComment?.modified),
+      mathRefreshQueued,
+      themeRefresh,
+      themeRefreshQueued: ["scheduling", "scheduled", "processing"].includes(
+        themeRefresh.state
+      ),
+    });
+  } catch (err) {
+    if (isDuplicateKey(err)) {
+      sendExternalError(
+        res,
+        new ExternalApiError(409, "polis_err_external_comment_duplicate"),
+        "polis_err_external_comment_edit"
+      );
+      return;
+    }
+    sendExternalError(res, err, "polis_err_external_comment_edit");
+  }
+}
+
+export async function handle_DELETE_external_comments(
+  req: ExternalRequest,
+  res: Response
+) {
+  try {
+    const conversationId = getPathConversationId(req);
+    const statementId = getPathStatementId(req);
+    const conversation = await resolveOwnedExternalConversation(
+      req,
+      conversationId,
+      true
+    );
+
+    const client = await pg.connect();
+    let deletedVoteCount = 0;
+    let transactionOpen = false;
+
+    try {
+      await client.query("BEGIN");
+      transactionOpen = true;
+
+      const comment = await client.query(
+        "SELECT 1 FROM comments WHERE zid = $1 AND tid = $2 FOR UPDATE;",
+        [conversation.conversationNumericId, statementId]
+      );
+      if (comment.rows.length === 0) {
+        throw new ExternalApiError(404, "polis_err_external_comment_not_found");
+      }
+
+      const affectedParticipants = await client.query<{ pid: number }>(
+        "SELECT DISTINCT pid FROM votes WHERE zid = $1 AND tid = $2;",
+        [conversation.conversationNumericId, statementId]
+      );
+      const affectedParticipantIds = affectedParticipants.rows.map((row) =>
+        Number(row.pid)
+      );
+
+      await client.query(
+        "DELETE FROM votes_latest_unique WHERE zid = $1 AND tid = $2;",
+        [conversation.conversationNumericId, statementId]
+      );
+      const deletedVotes = await client.query(
+        "DELETE FROM votes WHERE zid = $1 AND tid = $2 RETURNING pid;",
+        [conversation.conversationNumericId, statementId]
+      );
+      deletedVoteCount = deletedVotes.rows.length;
+
+      for (const table of [
+        "comment_translations",
+        "crowd_mod",
+        "stars",
+        "trashes",
+        "report_comment_selections",
+      ]) {
+        await client.query(
+          `DELETE FROM ${table} WHERE zid = $1 AND tid = $2;`,
+          [conversation.conversationNumericId, statementId]
+        );
+      }
+
+      await client.query("DELETE FROM comments WHERE zid = $1 AND tid = $2;", [
+        conversation.conversationNumericId,
+        statementId,
+      ]);
+
+      if (affectedParticipantIds.length > 0) {
+        await client.query(
+          "UPDATE participants AS participant SET vote_count = (" +
+            "SELECT COUNT(*) FROM votes " +
+            "WHERE votes.zid = participant.zid AND votes.pid = participant.pid" +
+            ") WHERE participant.zid = $1 " +
+            "AND participant.pid = ANY($2::int[]);",
+          [conversation.conversationNumericId, affectedParticipantIds]
+        );
+      }
+
+      await client.query("COMMIT");
+      transactionOpen = false;
+    } catch (err) {
+      if (transactionOpen) {
+        await client.query("ROLLBACK");
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    await updateConversationModifiedTime(conversation.conversationNumericId);
+    const mathRefreshQueued = await queueExternalMathRefreshBestEffort(
+      conversation.conversationNumericId,
+      "external_comment_delete"
+    );
+    const themeRefresh = await scheduleAutomaticDelphiAnalysisForStatementWrite(
+      conversation.conversationNumericId,
+      {
+        reason: "external_comment_delete",
+        touchExisting: true,
+      }
+    );
+
+    res.status(200).json({
+      conversationId,
+      statementId,
+      deleted: true,
+      deletedVoteCount,
+      mathRefreshQueued,
+      themeRefresh,
+      themeRefreshQueued: ["scheduling", "scheduled", "processing"].includes(
+        themeRefresh.state
+      ),
+    });
+  } catch (err) {
+    sendExternalError(res, err, "polis_err_external_comment_delete");
   }
 }
 

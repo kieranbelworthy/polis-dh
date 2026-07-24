@@ -50,6 +50,16 @@ describe("External Management API", () => {
     return agent.get(path).set("Authorization", `Bearer ${EXTERNAL_API_KEY}`);
   }
 
+  function externalPut(path: string) {
+    return agent.put(path).set("Authorization", `Bearer ${EXTERNAL_API_KEY}`);
+  }
+
+  function externalDelete(path: string) {
+    return agent
+      .delete(path)
+      .set("Authorization", `Bearer ${EXTERNAL_API_KEY}`);
+  }
+
   async function createExternalConversation(options: Record<string, any> = {}) {
     const response = await externalPost("/api/v3/external/conversations").send({
       topic: `External API conversation ${Date.now()}`,
@@ -230,6 +240,110 @@ describe("External Management API", () => {
     );
     expect(comment).toMatchObject({ mathRefreshQueued: true });
     expect(await getMathRefreshTaskCount(conversationNumericId)).toBe(1);
+  });
+
+  test("edits comments without removing their votes", async () => {
+    const conversationId = await createExternalConversation();
+    const comment = await createExternalComment(
+      conversationId,
+      `edit-author-${Date.now()}`,
+      `Original external comment ${Date.now()}`
+    );
+    const voterExternalParticipantId = `edit-voter-${Date.now()}`;
+    const vote = await externalPost(
+      `/api/v3/external/conversations/${conversationId}/votes`
+    ).send({
+      externalParticipantId: voterExternalParticipantId,
+      statementId: comment.statementId,
+      vote: -1,
+    });
+    expect(vote.status).toBe(200);
+
+    const editedText = `Edited external comment ${Date.now()}`;
+    const response = await externalPut(
+      `/api/v3/external/conversations/${conversationId}/comments/${comment.statementId}`
+    ).send({ text: editedText });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      conversationId,
+      statementId: comment.statementId,
+      text: editedText,
+    });
+    expect(typeof response.body.mathRefreshQueued).toBe("boolean");
+
+    const conversationNumericId = await getConversationNumericId(
+      conversationId
+    );
+    const storedComment = await pool.query(
+      "SELECT txt FROM comments WHERE zid = $1 AND tid = $2;",
+      [conversationNumericId, comment.statementId]
+    );
+    expect(storedComment.rows).toHaveLength(1);
+    expect(storedComment.rows[0].txt).toBe(editedText);
+
+    const storedVotes = await pool.query(
+      "SELECT vote FROM votes WHERE zid = $1 AND tid = $2;",
+      [conversationNumericId, comment.statementId]
+    );
+    expect(storedVotes.rows).toHaveLength(1);
+    expect(Number(storedVotes.rows[0].vote)).toBe(-1);
+  });
+
+  test("deletes comments and all of their votes", async () => {
+    const conversationId = await createExternalConversation();
+    const comment = await createExternalComment(
+      conversationId,
+      `delete-author-${Date.now()}`
+    );
+
+    for (let index = 0; index < 2; index += 1) {
+      const vote = await externalPost(
+        `/api/v3/external/conversations/${conversationId}/votes`
+      ).send({
+        externalParticipantId: `delete-voter-${index}-${Date.now()}`,
+        statementId: comment.statementId,
+        vote: index === 0 ? -1 : 1,
+      });
+      expect(vote.status).toBe(200);
+    }
+
+    const response = await externalDelete(
+      `/api/v3/external/conversations/${conversationId}/comments/${comment.statementId}`
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body).toMatchObject({
+      conversationId,
+      statementId: comment.statementId,
+      deleted: true,
+      deletedVoteCount: 2,
+    });
+    expect(typeof response.body.mathRefreshQueued).toBe("boolean");
+
+    const conversationNumericId = await getConversationNumericId(
+      conversationId
+    );
+    for (const table of ["comments", "votes", "votes_latest_unique"]) {
+      const storedRows = await pool.query(
+        `SELECT 1 FROM ${table} WHERE zid = $1 AND tid = $2;`,
+        [conversationNumericId, comment.statementId]
+      );
+      expect(storedRows.rows).toHaveLength(0);
+    }
+  });
+
+  test("returns not found when editing or deleting an unknown comment", async () => {
+    const conversationId = await createExternalConversation();
+    const path = `/api/v3/external/conversations/${conversationId}/comments/2147483647`;
+
+    const edit = await externalPut(path).send({ text: "Missing comment" });
+    expect(edit.status).toBe(404);
+    expect(edit.body.error).toBe("polis_err_external_comment_not_found");
+
+    const deletion = await externalDelete(path);
+    expect(deletion.status).toBe(404);
+    expect(deletion.body.error).toBe("polis_err_external_comment_not_found");
   });
 
   test("self-manages debounced theme refreshes and coalesces mid-run changes", async () => {

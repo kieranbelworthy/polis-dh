@@ -145,6 +145,7 @@ import {
 } from "./src/routes/votes";
 import {
   externalServiceAuth,
+  handle_DELETE_external_comments,
   handle_GET_external_insights_groups,
   handle_GET_external_insights_graph,
   handle_GET_external_insights_overview,
@@ -157,6 +158,7 @@ import {
   handle_POST_external_upvotes,
   handle_POST_external_votes,
   handle_POST_external_votes_batch,
+  handle_PUT_external_comments,
 } from "./src/routes/external";
 import { handle_GET_implicit_conversation_generation } from "./src/routes/implicitConversation";
 import {
@@ -356,6 +358,16 @@ helpersInitialized.then(
     app.post(
       "/api/v3/external/conversations/:conversationId/comments",
       handle_POST_external_comments
+    );
+
+    app.put(
+      "/api/v3/external/conversations/:conversationId/comments/:statementId",
+      handle_PUT_external_comments
+    );
+
+    app.delete(
+      "/api/v3/external/conversations/:conversationId/comments/:statementId",
+      handle_DELETE_external_comments
     );
 
     app.post(

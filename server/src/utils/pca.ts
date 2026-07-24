@@ -43,7 +43,7 @@ export type PcaCacheItem = {
     "in-conv": number[];
     "n-cmts": number;
     pca: {
-      comps: number[][]; // [dimensions][participants]
+      comps: number[][]; // [dimensions][statements]
       center: number[];
       "comment-extremity": number[];
       "comment-projection": any;
