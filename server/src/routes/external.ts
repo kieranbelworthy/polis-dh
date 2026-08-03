@@ -113,8 +113,12 @@ type ExternalStatementInsight = VoteStats & {
   groupAwareConsensus: number | null;
   crossGroupAgreement: number | null;
   meanGroupAgreement: number | null;
+  minimumRespondingGroupAgreement: number | null;
+  meanRespondingGroupAgreement: number | null;
   minimumGroupParticipation: number | null;
+  groupCount: number;
   respondingGroupCount: number;
+  respondingGroupCoverage: number;
   commentExtremity: number | null;
   groupStats: Record<string, ExternalGroupVoteStats>;
 };
@@ -1419,6 +1423,24 @@ function sortAndLimitStatements(
         left.statementId - right.statementId
       );
     });
+  } else if (options.sort === "availableAgreement") {
+    filtered.sort((left, right) => {
+      return (
+        right.respondingGroupCoverage - left.respondingGroupCoverage ||
+        (right.minimumRespondingGroupAgreement ?? -1) -
+          (left.minimumRespondingGroupAgreement ?? -1) ||
+        right.agreementAmongRespondents - left.agreementAmongRespondents ||
+        right.respondedVoteCount - left.respondedVoteCount ||
+        left.statementId - right.statementId
+      );
+    });
+  } else if (options.sort === "agreementAmongRespondents") {
+    filtered.sort(
+      (left, right) =>
+        right.agreementAmongRespondents - left.agreementAmongRespondents ||
+        right.respondedVoteCount - left.respondedVoteCount ||
+        left.statementId - right.statementId
+    );
   } else if (options.sort === "divisive") {
     filtered.sort((left, right) =>
       descending(left, right, (statement) => statement.divisivenessScore)
@@ -1729,6 +1751,8 @@ export async function handle_GET_external_insights_statements(
         "votes",
         "consensus",
         "crossGroupAgreement",
+        "availableAgreement",
+        "agreementAmongRespondents",
         "divisive",
         "divisiveness",
         "uncertainty",

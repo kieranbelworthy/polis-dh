@@ -43,8 +43,12 @@ describe("external statement agreement metrics", () => {
     ).toEqual({
       crossGroupAgreement: 0.75,
       meanGroupAgreement: 0.775,
+      minimumRespondingGroupAgreement: 0.75,
+      meanRespondingGroupAgreement: 0.775,
       minimumGroupParticipation: 0.5,
+      groupCount: 2,
       respondingGroupCount: 2,
+      respondingGroupCoverage: 1,
     });
   });
 
@@ -57,8 +61,30 @@ describe("external statement agreement metrics", () => {
     ).toEqual({
       crossGroupAgreement: null,
       meanGroupAgreement: null,
+      minimumRespondingGroupAgreement: 0.8,
+      meanRespondingGroupAgreement: 0.8,
       minimumGroupParticipation: 0,
+      groupCount: 2,
       respondingGroupCount: 1,
+      respondingGroupCoverage: 0.5,
+    });
+  });
+
+  test("returns an honest zero-coverage signal before any group responds", () => {
+    expect(
+      buildCrossGroupAgreementMetrics({
+        "0": groupStats(0, 0, 0, 20),
+        "1": groupStats(0, 0, 0, 20),
+      })
+    ).toEqual({
+      crossGroupAgreement: null,
+      meanGroupAgreement: null,
+      minimumRespondingGroupAgreement: null,
+      meanRespondingGroupAgreement: null,
+      minimumGroupParticipation: 0,
+      groupCount: 2,
+      respondingGroupCount: 0,
+      respondingGroupCoverage: 0,
     });
   });
 });

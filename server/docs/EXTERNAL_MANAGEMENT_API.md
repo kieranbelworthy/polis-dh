@@ -493,6 +493,8 @@ tid
 votes
 consensus
 crossGroupAgreement
+availableAgreement
+agreementAmongRespondents
 divisive
 uncertainty
 extremity
@@ -540,8 +542,12 @@ Response:
       "groupAwareConsensus": 0.72,
       "crossGroupAgreement": 0.625,
       "meanGroupAgreement": 0.6875,
+      "minimumRespondingGroupAgreement": 0.625,
+      "meanRespondingGroupAgreement": 0.6875,
       "minimumGroupParticipation": 0.5,
+      "groupCount": 3,
       "respondingGroupCount": 3,
+      "respondingGroupCoverage": 1,
       "commentExtremity": 0.44,
       "groupStats": {
         "0": {
@@ -587,6 +593,18 @@ as the number of groups changes.
 `meanGroupAgreement`
 : The unweighted mean agree share among non-pass respondents across opinion
 groups. Use `crossGroupAgreement` as the conservative primary signal.
+
+`minimumRespondingGroupAgreement` and `meanRespondingGroupAgreement`
+: Agreement among non-pass respondents in groups that responded to the
+statement. These remain available when group coverage is incomplete and must
+be interpreted alongside `respondingGroupCoverage`.
+
+`respondingGroupCoverage`
+: The share of current opinion groups with at least one agree or disagree
+response to the statement. `availableAgreement` sorts by coverage first, then
+the least-agreeing responding group, overall respondent agreement, and response
+count. This is useful for ranking the best available evidence without claiming
+that partial coverage is full cross-group consensus.
 
 `minimumGroupParticipation`
 : The lowest per-statement vote coverage in any opinion group, including

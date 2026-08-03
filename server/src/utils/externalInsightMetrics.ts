@@ -69,6 +69,8 @@ export function buildCrossGroupAgreementMetrics(
     (stats) => stats.agreementAmongRespondents
   );
   const participationValues = groups.map((stats) => stats.participationRate);
+  const groupCount = groups.length;
+  const respondingGroupCount = respondingGroups.length;
 
   return {
     crossGroupAgreement: completeCoverage
@@ -80,8 +82,21 @@ export function buildCrossGroupAgreementMetrics(
             agreementValues.length
         )
       : null,
+    minimumRespondingGroupAgreement:
+      respondingGroups.length > 0
+        ? roundScore(Math.min(...agreementValues))
+        : null,
+    meanRespondingGroupAgreement:
+      respondingGroups.length > 0
+        ? roundScore(
+            agreementValues.reduce((total, value) => total + value, 0) /
+              agreementValues.length
+          )
+        : null,
     minimumGroupParticipation:
       groups.length > 0 ? roundScore(Math.min(...participationValues)) : null,
-    respondingGroupCount: respondingGroups.length,
+    groupCount,
+    respondingGroupCount,
+    respondingGroupCoverage: ratio(respondingGroupCount, groupCount),
   };
 }
