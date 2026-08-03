@@ -492,9 +492,19 @@ Useful sort values:
 tid
 votes
 consensus
+crossGroupAgreement
 divisive
 uncertainty
 extremity
+```
+
+Optional statement filters:
+
+```text
+minVotes             minimum total votes, including passes
+minRespondedVotes    minimum agree plus disagree responses
+majority             agree, disagree, split, or pass
+active               true or false
 ```
 
 Response:
@@ -514,27 +524,39 @@ Response:
       "moderationStatus": 0,
       "authorExternalParticipantId": "user_42",
       "voteCount": 100,
+      "respondedVoteCount": 90,
       "agreeCount": 60,
       "disagreeCount": 30,
       "passCount": 10,
       "agreement": 0.6,
       "disagreement": 0.3,
       "pass": 0.1,
+      "agreementAmongRespondents": 0.666667,
+      "disagreementAmongRespondents": 0.333333,
       "consensusScore": 0.6,
       "divisivenessScore": 0.333333,
       "uncertaintyScore": 0.1,
       "majority": "agree",
       "groupAwareConsensus": 0.72,
+      "crossGroupAgreement": 0.625,
+      "meanGroupAgreement": 0.6875,
+      "minimumGroupParticipation": 0.5,
+      "respondingGroupCount": 3,
       "commentExtremity": 0.44,
       "groupStats": {
         "0": {
           "voteCount": 40,
+          "respondedVoteCount": 35,
           "agreeCount": 30,
           "disagreeCount": 5,
           "passCount": 5,
           "agreement": 0.75,
           "disagreement": 0.125,
-          "pass": 0.125
+          "pass": 0.125,
+          "agreementAmongRespondents": 0.857143,
+          "disagreementAmongRespondents": 0.142857,
+          "participantCount": 80,
+          "participationRate": 0.5
         }
       }
     }
@@ -555,6 +577,21 @@ Simple meaning:
 
 `groupAwareConsensus`
 : Pol.is consensus score that accounts for opinion groups.
+
+`crossGroupAgreement`
+: The lowest agree share among non-pass respondents in any opinion group. It
+is `null` unless every opinion group has at least one agree or disagree
+response. Unlike `groupAwareConsensus`, it remains on an intuitive 0-1 scale
+as the number of groups changes.
+
+`meanGroupAgreement`
+: The unweighted mean agree share among non-pass respondents across opinion
+groups. Use `crossGroupAgreement` as the conservative primary signal.
+
+`minimumGroupParticipation`
+: The lowest per-statement vote coverage in any opinion group, including
+passes. Use it separately from agreement so a high score with sparse evidence
+is not overstated.
 
 `commentExtremity`
 : How far this statement sits in the opinion space.

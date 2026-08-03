@@ -30,6 +30,13 @@ import {
   scheduleAutomaticDelphiAnalysisForStatementWrite,
 } from "../utils/delphiJobs";
 import { buildParticipantOpinionGraphPositions } from "../utils/externalOpinionGraph";
+import {
+  buildCrossGroupAgreementMetrics,
+  buildExternalGroupVoteStats,
+  buildVoteStats,
+  type ExternalGroupVoteStats,
+  type VoteStats,
+} from "../utils/externalInsightMetrics";
 import { getPca } from "../utils/pca";
 import type { PcaCacheItem } from "../utils/pca";
 import logger from "../utils/logger";
@@ -91,16 +98,6 @@ type VoteCountRow = {
   vote_count: number | string;
 };
 
-type VoteStats = {
-  voteCount: number;
-  agreeCount: number;
-  disagreeCount: number;
-  passCount: number;
-  agreement: number;
-  disagreement: number;
-  pass: number;
-};
-
 type ExternalStatementInsight = VoteStats & {
   statementId: number;
   text: string;
@@ -114,8 +111,12 @@ type ExternalStatementInsight = VoteStats & {
   uncertaintyScore: number;
   majority: "agree" | "disagree" | "split" | "pass" | null;
   groupAwareConsensus: number | null;
+  crossGroupAgreement: number | null;
+  meanGroupAgreement: number | null;
+  minimumGroupParticipation: number | null;
+  respondingGroupCount: number;
   commentExtremity: number | null;
-  groupStats: Record<string, VoteStats>;
+  groupStats: Record<string, ExternalGroupVoteStats>;
 };
 
 type ExternalThemeStatement = ReturnType<typeof compactThemeStatement>;
@@ -622,23 +623,6 @@ function ratio(numerator: number, denominator: number): number {
   return denominator > 0 ? roundScore(numerator / denominator) : 0;
 }
 
-function buildVoteStats(
-  agreeCount: number,
-  disagreeCount: number,
-  passCount: number,
-  voteCount = agreeCount + disagreeCount + passCount
-): VoteStats {
-  return {
-    voteCount,
-    agreeCount,
-    disagreeCount,
-    passCount,
-    agreement: ratio(agreeCount, voteCount),
-    disagreement: ratio(disagreeCount, voteCount),
-    pass: ratio(passCount, voteCount),
-  };
-}
-
 function zeroVoteStats(): VoteStats {
   return buildVoteStats(0, 0, 0, 0);
 }
@@ -824,8 +808,13 @@ async function buildExternalStatementInsights(
     loadExternalVoteCounts(conversation.conversationNumericId),
   ]);
   const pcaData = getPcaData(pca);
-  const groupIds = getPcaGroupClusters(pcaData).map((group) =>
-    String(group.id)
+  const groups = getPcaGroupClusters(pcaData);
+  const groupIds = groups.map((group) => String(group.id));
+  const groupParticipantCounts = new Map(
+    groups.map((group) => [
+      String(group.id),
+      getGroupParticipantIds(pcaData, group.members).length,
+    ])
   );
   const groupStatsByStatement = getPcaGroupVoteStatsByStatement(pcaData);
   const commentExtremityByTid = buildNumberByTidMap(
@@ -838,12 +827,17 @@ async function buildExternalStatementInsights(
     const statementId = Number(row.tid);
     const stats = voteCounts.get(statementId) || zeroVoteStats();
     const nonPassCount = stats.agreeCount + stats.disagreeCount;
-    const groupStats: Record<string, VoteStats> = {};
+    const groupStats: Record<string, ExternalGroupVoteStats> = {};
     const pcaGroupStats = groupStatsByStatement.get(statementId) || {};
 
     for (const groupId of groupIds) {
-      groupStats[groupId] = pcaGroupStats[groupId] || zeroVoteStats();
+      groupStats[groupId] = buildExternalGroupVoteStats(
+        pcaGroupStats[groupId] || zeroVoteStats(),
+        groupParticipantCounts.get(groupId) || 0
+      );
     }
+
+    const crossGroupMetrics = buildCrossGroupAgreementMetrics(groupStats);
 
     return {
       statementId,
@@ -868,6 +862,7 @@ async function buildExternalStatementInsights(
       groupAwareConsensus: toNullableNumber(
         groupAwareConsensus[String(statementId)]
       ),
+      ...crossGroupMetrics,
       commentExtremity:
         commentExtremityByTid.get(statementId) === undefined
           ? null
@@ -1377,10 +1372,22 @@ function buildExternalThemeInsight(
 
 function sortAndLimitStatements(
   statements: ExternalStatementInsight[],
-  options: { sort: string; limit: number; minVotes: number }
+  options: {
+    sort: string;
+    limit: number;
+    minVotes: number;
+    minRespondedVotes?: number;
+    majority?: "agree" | "disagree" | "split" | "pass";
+    active?: boolean;
+  }
 ): ExternalStatementInsight[] {
   const filtered = statements.filter(
-    (statement) => statement.voteCount >= options.minVotes
+    (statement) =>
+      statement.voteCount >= options.minVotes &&
+      statement.respondedVoteCount >= (options.minRespondedVotes || 0) &&
+      (options.majority === undefined ||
+        statement.majority === options.majority) &&
+      (options.active === undefined || statement.active === options.active)
   );
   const descending = (
     left: ExternalStatementInsight,
@@ -1399,6 +1406,19 @@ function sortAndLimitStatements(
     filtered.sort((left, right) =>
       descending(left, right, (statement) => statement.consensusScore)
     );
+  } else if (options.sort === "crossGroupAgreement") {
+    filtered.sort((left, right) => {
+      const crossGroupDifference =
+        (right.crossGroupAgreement ?? -1) - (left.crossGroupAgreement ?? -1);
+      const meanGroupDifference =
+        (right.meanGroupAgreement ?? -1) - (left.meanGroupAgreement ?? -1);
+      return (
+        crossGroupDifference ||
+        meanGroupDifference ||
+        right.respondedVoteCount - left.respondedVoteCount ||
+        left.statementId - right.statementId
+      );
+    });
   } else if (options.sort === "divisive") {
     filtered.sort((left, right) =>
       descending(left, right, (statement) => statement.divisivenessScore)
@@ -1708,6 +1728,7 @@ export async function handle_GET_external_insights_statements(
         "tid",
         "votes",
         "consensus",
+        "crossGroupAgreement",
         "divisive",
         "divisiveness",
         "uncertainty",
@@ -1717,10 +1738,31 @@ export async function handle_GET_external_insights_statements(
     );
     const pca = await getPca(conversation.conversationNumericId);
     const statements = await buildExternalStatementInsights(conversation, pca);
+    const majorityValue = readAliasedValue(query, "majority", []);
+    const majority =
+      majorityValue === undefined ||
+      majorityValue === null ||
+      majorityValue === ""
+        ? undefined
+        : readOptionalEnum(
+            query,
+            "majority",
+            ["agree", "disagree", "split", "pass"] as const,
+            "agree"
+          );
     const limitedStatements = sortAndLimitStatements(statements, {
       sort: sort === "divisiveness" ? "divisive" : sort,
       limit: readOptionalIntInRange(query, "limit", 100, 1, 500),
       minVotes: readOptionalIntInRange(query, "minVotes", 0, 0, 1000000),
+      minRespondedVotes: readOptionalIntInRange(
+        query,
+        "minRespondedVotes",
+        0,
+        0,
+        1000000
+      ),
+      majority,
+      active: readOptionalBoolValue(query, "active"),
     });
 
     res.status(200).json({
@@ -1769,13 +1811,23 @@ export async function handle_GET_external_insights_groups(
   }
 }
 
-export async function handle_GET_external_insights_graph(req: ExternalRequest, res: Response) {
+export async function handle_GET_external_insights_graph(
+  req: ExternalRequest,
+  res: Response
+) {
   try {
     const conversationId = getPathConversationId(req);
-    const conversation = await resolveOwnedExternalConversation(req, conversationId);
+    const conversation = await resolveOwnedExternalConversation(
+      req,
+      conversationId
+    );
     const pca = await getPca(conversation.conversationNumericId);
     const graph = await buildExternalOpinionGraph(conversation, pca);
-    res.status(200).json({ conversationId: conversation.conversationId, ...getPcaMathMeta(pca), ...graph });
+    res.status(200).json({
+      conversationId: conversation.conversationId,
+      ...getPcaMathMeta(pca),
+      ...graph,
+    });
   } catch (err) {
     sendExternalError(res, err, "polis_err_external_insights_graph");
   }
