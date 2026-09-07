@@ -1520,6 +1520,50 @@ async function loadParticipantExternalIdMap(
   return map;
 }
 
+async function findExternalParticipantId(
+  conversation: ExternalConversation,
+  externalParticipantId: string
+): Promise<number | null> {
+  const rows = (await pg.queryP_readOnly(
+    "SELECT p.pid FROM xids x " +
+      "INNER JOIN participants p ON p.uid = x.uid AND p.zid = ($1) " +
+      "WHERE x.owner = ($2) AND x.xid = ($3) " +
+      "AND (x.zid = ($1) OR x.zid IS NULL) " +
+      "ORDER BY CASE WHEN x.zid = ($1) THEN 0 ELSE 1 END, x.created DESC " +
+      "LIMIT 1;",
+    [
+      conversation.conversationNumericId,
+      conversation.ownerUserId,
+      externalParticipantId,
+    ]
+  )) as Array<{ pid: number }>;
+
+  return Array.isArray(rows) && rows.length > 0 ? Number(rows[0].pid) : null;
+}
+
+export function buildExternalGroupMembershipAssignment(
+  pca: PcaCacheItem | undefined,
+  participantId: number | null
+) {
+  const mathMeta = getPcaMathMeta(pca);
+  if (!mathMeta.mathReady) {
+    return { status: "unavailable" as const };
+  }
+  if (participantId === null || !Number.isFinite(participantId)) {
+    return { status: "participant_not_found" as const };
+  }
+
+  for (const [groupId, participantIds] of getPcaGroupMemberSets(
+    getPcaData(pca)
+  ).entries()) {
+    if (participantIds.has(participantId)) {
+      return { status: "assigned" as const, groupId };
+    }
+  }
+
+  return { status: "unassigned" as const };
+}
+
 function getPcaItemTid(item: any): number | null {
   if (Number.isInteger(item)) {
     return item;
@@ -1832,6 +1876,40 @@ export async function handle_GET_external_insights_groups(
     });
   } catch (err) {
     sendExternalError(res, err, "polis_err_external_insights_groups");
+  }
+}
+
+export async function handle_POST_external_insights_group_membership(
+  req: ExternalRequest,
+  res: Response
+) {
+  try {
+    const conversationId = getPathConversationId(req);
+    const body = readObject(req.body || {}, "body");
+    const externalParticipantId = readRequiredString(
+      body,
+      "externalParticipantId",
+      999,
+      ["xid"]
+    );
+    const conversation = await resolveOwnedExternalConversation(
+      req,
+      conversationId
+    );
+    const [pca, participantId] = await Promise.all([
+      getPca(conversation.conversationNumericId),
+      findExternalParticipantId(conversation, externalParticipantId),
+    ]);
+    const { mathReady, mathTick } = getPcaMathMeta(pca);
+
+    res.status(200).json({
+      conversationId: conversation.conversationId,
+      mathReady,
+      mathTick,
+      assignment: buildExternalGroupMembershipAssignment(pca, participantId),
+    });
+  } catch (err) {
+    sendExternalError(res, err, "polis_err_external_insights_group_membership");
   }
 }
 

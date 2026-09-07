@@ -664,6 +664,36 @@ curl "$POLIS_URL/api/v3/external/conversations/abc123def/insights/groups?include
   -H "Authorization: Bearer $API_KEY"
 ```
 
+## Resolve One Participant's Opinion Group
+
+Use the authenticated management endpoint to resolve a single external
+participant against the current PCA groups without downloading group member
+lists or coordinates:
+
+```bash
+curl -X POST \
+  "$POLIS_URL/api/v3/external/conversations/abc123def/insights/group-membership" \
+  -H "Authorization: Bearer $API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"externalParticipantId":"participant-1"}'
+```
+
+An assigned response is:
+
+```json
+{
+  "conversationId": "abc123def",
+  "mathReady": true,
+  "mathTick": 42,
+  "assignment": {"status": "assigned", "groupId": "0"}
+}
+```
+
+`assignment.status` is `assigned`, `unassigned`, `participant_not_found`, or
+`unavailable`. `groupId` is present only for `assigned`. The response never
+echoes the submitted external participant ID or returns any other participant
+identity or PCA coordinates.
+
 ## Read Opinion Graph Data
 
 Use this endpoint to render a participant scatterplot:

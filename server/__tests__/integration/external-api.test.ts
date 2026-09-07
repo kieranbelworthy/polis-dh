@@ -572,6 +572,99 @@ describe("External Management API", () => {
     expect(response.body.groups).toEqual([]);
   });
 
+  test("looks up only the requested participant's current group membership", async () => {
+    const conversationId = await createExternalConversation();
+    const assigned = await createExternalComment(
+      conversationId,
+      `membership-assigned-${Date.now()}`
+    );
+    const unassigned = await createExternalComment(
+      conversationId,
+      `membership-unassigned-${Date.now()}`
+    );
+    const zid = await getConversationNumericId(conversationId);
+
+    await pool.query(
+      "INSERT INTO math_main " +
+        "(zid, math_env, data, last_vote_timestamp, caching_tick, math_tick) " +
+        "VALUES ($1, $2, $3::jsonb, 0, 0, 17);",
+      [
+        zid,
+        process.env.MATH_ENV || "prod",
+        JSON.stringify({
+          math_tick: 17,
+          "group-clusters": [{ id: 4, center: [0, 0], members: [0] }],
+          "base-clusters": {
+            id: [0],
+            x: [0],
+            y: [0],
+            count: [1],
+            members: [[assigned.participantId]],
+          },
+        }),
+      ]
+    );
+
+    const assignedResponse = await externalPost(
+      `/api/v3/external/conversations/${conversationId}/insights/group-membership`
+    ).send({ externalParticipantId: assigned.externalParticipantId });
+
+    expect(assignedResponse.status).toBe(200);
+    expect(assignedResponse.body).toMatchObject({
+      conversationId,
+      mathReady: true,
+      mathTick: 17,
+      assignment: { status: "assigned", groupId: "4" },
+    });
+    expect(JSON.stringify(assignedResponse.body)).not.toContain(
+      assigned.externalParticipantId
+    );
+    expect(assignedResponse.body.points).toBeUndefined();
+
+    const unassignedResponse = await externalPost(
+      `/api/v3/external/conversations/${conversationId}/insights/group-membership`
+    ).send({ externalParticipantId: unassigned.externalParticipantId });
+    expect(unassignedResponse.body.assignment).toEqual({
+      status: "unassigned",
+    });
+
+    const missingResponse = await externalPost(
+      `/api/v3/external/conversations/${conversationId}/insights/group-membership`
+    ).send({ externalParticipantId: `missing-${Date.now()}` });
+    expect(missingResponse.body.assignment).toEqual({
+      status: "participant_not_found",
+    });
+  });
+
+  test("validates membership lookup and reports unavailable before math", async () => {
+    const conversationId = await createExternalConversation();
+    const participant = await createExternalComment(
+      conversationId,
+      `membership-not-ready-${Date.now()}`
+    );
+
+    const missing = await externalPost(
+      `/api/v3/external/conversations/${conversationId}/insights/group-membership`
+    ).send({});
+    expect(missing.status).toBe(400);
+    expect(missing.body).toEqual({
+      error: "polis_err_param_missing_externalParticipantId",
+    });
+
+    const unavailable = await externalPost(
+      `/api/v3/external/conversations/${conversationId}/insights/group-membership`
+    ).send({ externalParticipantId: participant.externalParticipantId });
+    expect(unavailable.status).toBe(200);
+    expect(unavailable.body.assignment).toEqual({ status: "unavailable" });
+
+    const unauthorized = await agent
+      .post(
+        `/api/v3/external/conversations/${conversationId}/insights/group-membership`
+      )
+      .send({ externalParticipantId: participant.externalParticipantId });
+    expect(unauthorized.status).toBe(401);
+  });
+
   test("returns an empty graph shape before math has run", async () => {
     const conversationId = await createExternalConversation();
     const response = await externalGet(

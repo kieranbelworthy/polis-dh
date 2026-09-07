@@ -152,6 +152,7 @@ import {
   handle_GET_external_insights_statements,
   handle_GET_external_insights_status,
   handle_GET_external_insights_themes,
+  handle_POST_external_insights_group_membership,
   handle_POST_external_comments,
   handle_POST_external_conversations,
   handle_POST_external_insights_refresh,
@@ -398,6 +399,11 @@ helpersInitialized.then(
     app.get(
       "/api/v3/external/conversations/:conversationId/insights/groups",
       handle_GET_external_insights_groups
+    );
+
+    app.post(
+      "/api/v3/external/conversations/:conversationId/insights/group-membership",
+      handle_POST_external_insights_group_membership
     );
 
     app.get(

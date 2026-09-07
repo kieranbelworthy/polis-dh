@@ -37,6 +37,23 @@ function middleware_log_request_body(
       if (temp.polisApiKey) {
         temp.polisApiKey = "pkey_somePolisApiKey";
       }
+      // External participant identifiers are stable identity links. They are
+      // accepted by management endpoints, but must never be copied into logs.
+      if (temp.externalParticipantId) {
+        temp.externalParticipantId = "[redacted]";
+      }
+      if (temp.xid) {
+        temp.xid = "[redacted]";
+      }
+      if (Array.isArray(temp.votes)) {
+        temp.votes = temp.votes.map((vote: Record<string, unknown>) => ({
+          ...vote,
+          ...(vote?.externalParticipantId
+            ? { externalParticipantId: "[redacted]" }
+            : {}),
+          ...(vote?.xid ? { xid: "[redacted]" } : {}),
+        }));
+      }
       b = JSON.stringify(temp);
     }
     logger.debug("middleware_log_request_body", { path: req.path, body: b });
